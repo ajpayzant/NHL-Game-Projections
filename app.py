@@ -168,6 +168,13 @@ def pick_game(s: dict, day: str):
 
 # ---------------------------------------------------------------- shared table
 
+# prop columns, in display order: (header, probability column). Shown as a % bar, or as the
+# fair (no-vig) American price for the over when the sidebar is set to Fair odds.
+PROP_COLS = [("o0.5 PTS", "p_pts_1"), ("o1.5 PTS", "p_pts_2"), ("o0.5 G", "p_g_1"), ("o1.5 G", "p_g_2"),
+             ("o0.5 A", "p_a_1"), ("o1.5 SOG", "p_sog_2"), ("o2.5 SOG", "p_sog_3"), ("o3.5 SOG", "p_sog_4"),
+             ("o0.5 PPP", "p_ppp_1")]
+PROP_NAMES = [h for h, _ in PROP_COLS]
+
 SPOT_ORDER = {"LW": 0, "C": 1, "RW": 2, "LD": 0, "RD": 1}
 
 
@@ -190,19 +197,17 @@ def player_table(p: pd.DataFrame, deps: dict, with_team: bool = True) -> pd.Data
         "PP": t.given_pp.astype(int).map({0: "", 1: "PP1", 2: "PP2"}),
         "TOI": t.toi_hat, "PP TOI": t.toi_pp_hat, "SOG": t.sog_hat,
         "G": t.g_hat, "A": t.a_hat, "PTS": t.pts_hat, "PPP": t.ppp_hat,
-        "P(1+ pt)": t.p_pts_1, "P(1+ PPP)": t.p_ppp_1, "P(goal)": t.p_g_1, "P(2+ SOG)": t.p_sog_2, "P(3+ SOG)": t.p_sog_3,
+        **{h: t[c] for h, c in PROP_COLS},
         "L10 TOI": t.l10_toi})
     return out if with_team else out.drop(columns=["Team", "L10 TOI"])
 
 
 def show(t: pd.DataFrame, height="auto"):
     t = t.copy()
-    pcols = [c for c in t.columns if c.startswith("P(")]
-    if odds_mode():  # same columns, shown as fair odds for the over
-        ren = {"P(1+ pt)": "o0.5 PTS", "P(1+ PPP)": "o0.5 PPP", "P(goal)": "o0.5 G", "P(2+ SOG)": "o1.5 SOG", "P(3+ SOG)": "o2.5 SOG"}
+    pcols = [c for c in t.columns if c in PROP_NAMES]
+    if odds_mode():  # same columns, shown as the fair price for the over
         for c in pcols:
             t[c] = t[c].map(american)
-        t = t.rename(columns=ren)
         pcols = []
     else:
         t[pcols] = (t[pcols] * 100).round()
@@ -210,7 +215,8 @@ def show(t: pd.DataFrame, height="auto"):
     cfg["PPP"] = st.column_config.NumberColumn("PPP", format="%.2f", width="small",
                                                help="Power-play points (goals + assists on the power play)")
     cfg |= {c: st.column_config.NumberColumn(format="%.1f", width="small") for c in ("TOI", "PP TOI")}
-    cfg |= {c: st.column_config.TextColumn(width="small") for c in ("Slot", "PP", "Team")}
+    cfg |= {c: st.column_config.TextColumn(width="small", pinned=c != "PP") for c in ("Slot", "PP", "Team")}
+    cfg["Player"] = st.column_config.TextColumn("Player", pinned=True)  # names stay put while the props scroll
     cfg["Line"] = None  # kept for filtering, not shown
     cfg |= {c: st.column_config.ProgressColumn(format="%d%%", min_value=0, max_value=100, width="small") for c in pcols}
     cfg["L10 TOI"] = st.column_config.NumberColumn("Last-10 TOI", format="%.1f")
@@ -321,7 +327,7 @@ def page_slate():
     c1, c2, c3 = st.columns([2, 2, 1])
     teams = c1.multiselect("Teams", sorted(p.team.unique()))
     pos = c2.multiselect("Position", ["C", "L", "R", "D"])
-    sort = c3.selectbox("Sort by", ["PTS", "SOG", "G", "A", "PPP", "TOI", "P(1+ pt)", "P(1+ PPP)", "P(goal)", "P(3+ SOG)"])
+    sort = c3.selectbox("Sort by", ["PTS", "SOG", "G", "A", "PPP", "TOI"] + PROP_NAMES)
     q = p[p.team.isin(teams)] if teams else p
     q = q[q.pos.isin(pos)] if pos else q
     t = player_table(q, deps).sort_values(sort, ascending=False)
@@ -375,7 +381,7 @@ def page_game():
     st.divider()
     c1, c2 = st.columns([2, 3])
     view = c1.segmented_control("Team", [g.away, g.home], default=g.away, key=f"gv_{g.game_id}") or g.away
-    stat = c2.segmented_control("Chart", ["PTS", "SOG", "G", "A", "TOI", "P(1+ pt)"], default="PTS", key="gstat") or "PTS"
+    stat = c2.segmented_control("Chart", ["PTS", "SOG", "G", "A", "PPP", "TOI", "o0.5 PTS"], default="PTS", key="gstat") or "PTS"
     t = player_table(p[p.team == view], deps, with_team=False)
     fit = lambda df: 35 * (len(df) + 1) + 3  # every row visible, no inner scrolling
     st.markdown("**Forwards**")
@@ -385,13 +391,14 @@ def page_game():
     dm = t[t.Line.str.startswith("D")]
     show(dm, height=fit(dm))
     st.markdown(f"**Projected {stat}, {view}**")
-    ch = t.assign(val=t[stat])
-    fmt = ".0%" if stat.startswith("P(") else ".2f"
+    # chart a copy without dotted names (Altair reads "o0.5" as a nested field)
+    ch = t[["Player", "Slot", "TOI", "SOG", "PTS"]].assign(val=t[stat].to_numpy(), p_pt=t["o0.5 PTS"].to_numpy())
+    fmt = ".0%" if stat in PROP_NAMES else ".2f"
     bar = alt.Chart(ch).mark_bar(color=PROJ, cornerRadiusEnd=4, height=16).encode(
         y=alt.Y("Player:N", sort="-x", title=None, axis=alt.Axis(labelOverlap=False, labelLimit=200)),
         x=alt.X("val:Q", title=f"Projected {stat}", axis=alt.Axis(format=fmt)),
         tooltip=["Player", "Slot", alt.Tooltip("TOI:Q", format=".1f"), alt.Tooltip("SOG:Q", format=".2f"),
-                 alt.Tooltip("PTS:Q", format=".2f"), alt.Tooltip("P(1+ pt):Q", format=".0%")])
+                 alt.Tooltip("PTS:Q", format=".2f"), alt.Tooltip("p_pt:Q", format=".0%", title="P(o0.5 PTS)")])
     text = bar.mark_text(align="left", dx=4, fontSize=11, color="#52514e").encode(text=alt.Text("val:Q", format=fmt))
     st.altair_chart((bar + text).properties(height=22 * len(ch) + 40), width="stretch")
 

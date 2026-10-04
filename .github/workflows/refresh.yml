@@ -3,6 +3,7 @@ name: Refresh projections
 # Fetch finished NHL games, rebuild the tables, refit, cache the next few days' slate, and
 # publish the result to the release tagged `data`, which the Streamlit app downloads
 # (cloud.py). Data lives in the release, not in git, so the repo does not grow every run.
+# Scheduled runs only fire from the default branch, which must be `main`.
 on:
   schedule:
     - cron: "0 13 * * *"    # 9:00 ET (8:00 in winter)

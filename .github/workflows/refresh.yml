@@ -1,0 +1,65 @@
+name: Refresh projections
+
+# Fetch finished NHL games, rebuild the tables, refit, cache the next few days' slate, and
+# publish the result to the release tagged `data`, which the Streamlit app downloads
+# (cloud.py). Data lives in the release, not in git, so the repo does not grow every run.
+on:
+  schedule:
+    - cron: "0 13 * * *"    # 9:00 ET (8:00 in winter)
+    - cron: "0 18 * * *"    # 14:00 ET
+    - cron: "30 22 * * *"   # 18:30 ET
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "research/**"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PYTHONUTF8: "1"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"   # must match the Streamlit app's Python (state.pkl is a pickle)
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Restore data from the last run (first run: the seed branch)
+        run: |
+          if gh release view data > /dev/null 2>&1; then
+            gh release download data -p bundle.tar -D dist
+            python publish.py unpack dist/bundle.tar
+            rm dist/bundle.tar
+          else
+            git fetch --depth 1 origin seed
+            git checkout FETCH_HEAD -- data
+            git reset -q data
+          fi
+
+      - name: Refresh and project
+        run: python live.py
+
+      - name: Pack
+        run: python publish.py pack
+
+      - name: Publish to the data release
+        run: |
+          gh release view data > /dev/null 2>&1 || \
+            gh release create data --title "Projection data" --notes "Written by the refresh workflow; read by the app. Do not edit."
+          # data files first, the manifest last, so the app never sees a manifest that points ahead of its files
+          gh release upload data dist/bundle.tar dist/state.pkl dist/player_games.parquet dist/backtest_app.parquet --clobber
+          gh release upload data dist/manifest.json --clobber

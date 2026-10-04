@@ -1,0 +1,2 @@
+-r requirements.txt
+playwright  # research/screens*.py (screenshots through the installed Edge)

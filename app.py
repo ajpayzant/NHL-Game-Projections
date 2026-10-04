@@ -188,18 +188,18 @@ def player_table(p: pd.DataFrame, deps: dict, with_team: bool = True) -> pd.Data
     out = pd.DataFrame({
         "Team": t.team, "Slot": slot, "Line": t.LineLab, "Player": t["name"],
         "PP": t.given_pp.astype(int).map({0: "", 1: "PP1", 2: "PP2"}),
-        "TOI": t.toi_hat, "PP TOI": t.toi_pp_hat, "SOG": t.sog_hat, "Avg SOG": t.avg_sog,
-        "G": t.g_hat, "A": t.a_hat, "PTS": t.pts_hat, "PPP": t.ppp_hat, "Avg PTS": t.avg_points,
-        "P(1+ pt)": t.p_pts_1, "P(goal)": t.p_g_1, "P(2+ SOG)": t.p_sog_2, "P(3+ SOG)": t.p_sog_3,
+        "TOI": t.toi_hat, "PP TOI": t.toi_pp_hat, "SOG": t.sog_hat,
+        "G": t.g_hat, "A": t.a_hat, "PTS": t.pts_hat, "PPP": t.ppp_hat,
+        "P(1+ pt)": t.p_pts_1, "P(1+ PPP)": t.p_ppp_1, "P(goal)": t.p_g_1, "P(2+ SOG)": t.p_sog_2, "P(3+ SOG)": t.p_sog_3,
         "L10 TOI": t.l10_toi})
-    return out if with_team else out.drop(columns=["Team", "L10 TOI", "Avg PTS", "Avg SOG"])
+    return out if with_team else out.drop(columns=["Team", "L10 TOI"])
 
 
 def show(t: pd.DataFrame, height="auto"):
     t = t.copy()
     pcols = [c for c in t.columns if c.startswith("P(")]
     if odds_mode():  # same columns, shown as fair odds for the over
-        ren = {"P(1+ pt)": "o0.5 PTS", "P(goal)": "o0.5 G", "P(2+ SOG)": "o1.5 SOG", "P(3+ SOG)": "o2.5 SOG"}
+        ren = {"P(1+ pt)": "o0.5 PTS", "P(1+ PPP)": "o0.5 PPP", "P(goal)": "o0.5 G", "P(2+ SOG)": "o1.5 SOG", "P(3+ SOG)": "o2.5 SOG"}
         for c in pcols:
             t[c] = t[c].map(american)
         t = t.rename(columns=ren)
@@ -213,10 +213,6 @@ def show(t: pd.DataFrame, height="auto"):
     cfg |= {c: st.column_config.TextColumn(width="small") for c in ("Slot", "PP", "Team")}
     cfg["Line"] = None  # kept for filtering, not shown
     cfg |= {c: st.column_config.ProgressColumn(format="%d%%", min_value=0, max_value=100, width="small") for c in pcols}
-    cfg["Avg PTS"] = st.column_config.NumberColumn("PTS avg", format="%.2f", width="small",
-                                                   help="This season's points per game (last season's until 5 games)")
-    cfg["Avg SOG"] = st.column_config.NumberColumn("SOG avg", format="%.2f", width="small",
-                                                   help="This season's shots per game (last season's until 5 games)")
     cfg["L10 TOI"] = st.column_config.NumberColumn("Last-10 TOI", format="%.1f")
     st.dataframe(t, hide_index=True, column_config=cfg, width="stretch", height=height)
 
@@ -325,7 +321,7 @@ def page_slate():
     c1, c2, c3 = st.columns([2, 2, 1])
     teams = c1.multiselect("Teams", sorted(p.team.unique()))
     pos = c2.multiselect("Position", ["C", "L", "R", "D"])
-    sort = c3.selectbox("Sort by", ["PTS", "SOG", "G", "A", "PPP", "TOI", "P(1+ pt)", "P(goal)", "P(3+ SOG)"])
+    sort = c3.selectbox("Sort by", ["PTS", "SOG", "G", "A", "PPP", "TOI", "P(1+ pt)", "P(1+ PPP)", "P(goal)", "P(3+ SOG)"])
     q = p[p.team.isin(teams)] if teams else p
     q = q[q.pos.isin(pos)] if pos else q
     t = player_table(q, deps).sort_values(sort, ascending=False)

@@ -35,8 +35,8 @@ run_app.bat                          # http://localhost:8670
 
 **Refresh.** `.github/workflows/refresh.yml` runs at 13:00, 18:00 and 22:30 UTC (9:00, 14:00,
 18:30 ET), on every push to `main`, and on demand (Actions -> Refresh projections -> Run
-workflow). It restores the previous run's data from the release tagged `data` (the first run
-uses the `seed` branch), fetches finished games, rebuilds, refits, caches the next three days'
+workflow). It restores the previous run's data from the release tagged `data`, fetches
+finished games, rebuilds, refits (skaters, then goalie saves), caches the next three days'
 slate and uploads the result back to that release. Data never goes into git commits, so the repo
 does not grow. GitHub sometimes runs scheduled jobs late; for exact times, point an external
 scheduler (e.g. cron-job.org) at the workflow_dispatch API, as the line-alert bot does.
@@ -68,6 +68,7 @@ Without them the app still works, but saved overrides last only until the contai
 | `markets.py` | team moneyline / puck line / total from the projected score |
 | `backtest.py` | walk-forward evaluation vs baselines |
 | `live.py` | schedule, rosters, Daily Faceoff lines + starters, overrides, projection |
+| `saves/` | the goalie saves model (shots faced, save %, pull risk, starter model), merged from NHL_Goalie_Saves; its own tables in `data/saves`, rebuilt at the end of `live.py` |
 | `app.py` | Slate · Game · Lines & goalies · Player · How it works |
 | `cloud.py`, `store.py`, `publish.py` | Streamlit Cloud: download the latest data release; overrides in a gist; pack / unpack data for the workflow |
 | `research/` | the experiments behind every modelling choice (bake-off, ablation, bias checks, tuning) |

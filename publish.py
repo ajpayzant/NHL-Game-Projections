@@ -5,8 +5,8 @@
     python publish.py slim-backtest   # data/backtest/backtest_app.parquet for the app's chart
 
 bundle.tar holds what the next refresh needs (history tables, the current season's raw games,
-fitted xG models, Daily Faceoff snapshot log, the slim backtest); the other files are what the
-deployed app downloads.
+fitted xG models, Daily Faceoff snapshot log, the slim backtest, the goalie saves tables under
+data/saves); the other files are what the deployed app downloads.
 """
 from __future__ import annotations
 
@@ -21,12 +21,14 @@ import config as C
 
 DIST = C.ROOT / "dist"
 BACKTEST_APP = C.DATA / "backtest" / "backtest_app.parquet"
+SAVES_LAKE = C.DATA / "saves" / "lake"
+SAVES_STATE = C.DATA / "saves" / "models" / "live.pkl"
 APP_BACKTEST_COLS = ["game_type", "gp_16", "points", "goals", "assists", "sog", "ppp",
                      "p_pts_1", "p_g_1", "p_a_1", "p_sog_2", "p_sog_3", "p_sog_4", "p_ppp_1"]
 
 
 def bundle_paths() -> list:
-    return [C.LAKE, C.RAW / str(C.CURRENT_SEASON), C.MODELS, C.DFO_DIR, BACKTEST_APP]
+    return [C.LAKE, C.RAW / str(C.CURRENT_SEASON), C.MODELS, C.DFO_DIR, BACKTEST_APP, SAVES_LAKE]
 
 
 def slim_backtest() -> None:
@@ -45,6 +47,8 @@ def pack() -> None:
     shutil.copy(C.DATA / "live" / "state.pkl", DIST / "state.pkl")
     shutil.copy(C.LAKE / "player_games.parquet", DIST / "player_games.parquet")
     shutil.copy(BACKTEST_APP, DIST / "backtest_app.parquet")
+    if SAVES_STATE.exists():  # a failed goalie build leaves the last published saves.pkl in place
+        shutil.copy(SAVES_STATE, DIST / "saves.pkl")
     import pickle
     with open(C.DATA / "live" / "state.pkl", "rb") as fh:
         built = pickle.load(fh)["built_at"]

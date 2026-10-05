@@ -256,3 +256,18 @@ expectations and probabilities right; no pregame model can call single games.
 The line-slot weights were fitted without historical *pregame* line charts (none exist); the
 tool logs every Daily Faceoff read so they can be refitted on real pregame lines after a few
 weeks of the season.
+
+## 7. Goalies
+
+The Slate (switch **Players** to Goalies) and the Game page (under Defence) also show goalie saves, from
+the saves model merged in from the Goalie Saves tool, unchanged. It projects the shots a team faces,
+the goalie's save chance on those shots (matchup shot quality and his talent), and the chance he gets
+pulled, then simulates the game 10,000 times. **SV** is his average saves if he starts, counting the
+chance he's pulled. In a game he finishes he usually beats it by about a save, and a pulled start
+averages about 13 fewer.
+
+**Start %** begins with the starter model (rest, back-to-backs, who started recently). Then it follows
+Lines & goalies: a Daily Faceoff starting-goalie report moves the odds (Confirmed nearly settles it,
+Likely moves them a lot, Unconfirmed a little), and an override there pins the starter. The saves
+props are priced as if he starts. In the 2023–25 backtest, saves missed by about 5.3–5.6 a game
+(last-10 average: 5.7–6.1), and the 10th–90th percentile range held the result about 82% of the time.

@@ -34,6 +34,7 @@ import model
 import parse
 import store
 import tables
+from saves import live as saves_live
 
 LIVE = C.DATA / "live"
 HORIZON_DAYS = 3
@@ -444,6 +445,12 @@ def build_state(fetch_new: bool = True, verbose: bool = True) -> dict:
     if verbose:
         print(f"state built: {len(games)} games, {len(state['slate'])} roster skaters, "
               f"coefs fitted on {len(hist[hist.season >= FIRST_TRAIN]):,} player-games")
+    try:  # goalie saves for the same games; the skater slate never waits on it
+        if fetch_new:
+            saves_live.refresh_lake(verbose)
+        saves_live.build_state(games, verbose)
+    except Exception as e:
+        print(f"saves state not rebuilt: {e!r}")
     return state
 
 

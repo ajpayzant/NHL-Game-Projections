@@ -18,6 +18,7 @@ import live
 import markets
 import model
 import store
+from saves import live as saves_live
 
 st.set_page_config(page_title="NHL Skater Projections", layout="wide")
 PROJ, ACT, MUTED = "#2a78d6", "#eb6834", "#8a8984"   # palette slots 1-2 + muted ink
@@ -223,6 +224,91 @@ def show(t: pd.DataFrame, height="auto"):
     st.dataframe(t, hide_index=True, column_config=cfg, width="stretch", height=height)
 
 
+# ---------------------------------------------------------------- goalies
+
+@st.cache_resource
+def _saves_state(mtime: float) -> dict | None:
+    return saves_live.load_state()
+
+
+def saves_state() -> dict | None:
+    p = saves_live.STATE
+    return _saves_state(p.stat().st_mtime) if p.exists() else None
+
+
+@st.cache_data(show_spinner="Simulating goalie saves...")
+def _team_goalies(built_at: str, game_id: int, team: str, key: str) -> list[dict]:
+    """Saves projections for one team-game. `key` is the deployment that decides who starts
+    (goalie, Daily Faceoff status, source), so a new report or override re-simulates."""
+    S = saves_state()
+    goalie, status, source = json.loads(key)
+    cand = S["cand"][(S["cand"].game_id == game_id) & (S["cand"].team == team)]
+    probs = saves_live.starter_probs(cand, {team: {"goalie": goalie, "goalie_status": status, "source": source}})
+    return saves_live.project_team(S, game_id, team, probs, seed=game_id % 100000)
+
+
+# saves props, in display order: shown like the skater props (% bar, or the fair price for the over)
+SAVE_LINES = [21.5, 22.5, 23.5, 24.5, 25.5, 26.5, 27.5, 28.5, 29.5]
+GOALIE_PROP_COLS = [(f"o{x:g} SV", f"p_over_{x}") for x in SAVE_LINES]
+GOALIE_PROP_NAMES = [h for h, _ in GOALIE_PROP_COLS]
+GOALIE_NOTE = ("Saves props are priced as if he starts (books void a goalie prop when he doesn't). "
+               "Who starts follows Lines & goalies: an override there pins him.")
+
+
+def goalie_table(day: str, deps: dict, game_id: int | None = None, backups: bool = True) -> pd.DataFrame:
+    """One row per plausible starter (starter, then backup, for every team), most likely first."""
+    S = saves_state()
+    if S is None:
+        return pd.DataFrame()
+    games = state()["games"]
+    games = games[games.date == day] if game_id is None else games[games.game_id == game_id]
+    nm = names()
+    rows = []
+    for g in games.itertuples():
+        for team, opp in ((g.away, g.home), (g.home, g.away)):
+            d = deps.get(team, {})
+            key = json.dumps([d.get("goalie"), d.get("goalie_status", ""), d.get("source", "")])
+            for i, p in enumerate(_team_goalies(S["built_at"], int(g.game_id), team, key)):
+                if i and not backups:
+                    break
+                rows.append({"Team": team, "Opp": opp, "Goalie": nm.get(p["goalie"], p["name"]),
+                             "Role": "Starter" if i == 0 else "Backup", "Start %": p["p_start"],
+                             "Status": p["status"], "SV": p["mean"], "Median": p["median"],
+                             "Range": f"{p['p10']:.0f}–{p['p90']:.0f}", "SA": p["shots_faced"],
+                             "GA": p["goals_against"], "SV%": p["exp_sv_pct"], "Pull %": p["pull_rate"],
+                             **{h: p[c] for h, c in GOALIE_PROP_COLS}})
+    return pd.DataFrame(rows)
+
+
+def show_goalies(t: pd.DataFrame, height="auto"):
+    t = t.copy()
+    pcols = list(GOALIE_PROP_NAMES)
+    if odds_mode():  # same columns, shown as the fair price for the over
+        for c in pcols:
+            t[c] = t[c].map(american)
+        pcols = []
+    else:
+        t[pcols] = (t[pcols] * 100).round()
+    t["Start %"] = (t["Start %"] * 100).round()
+    cfg = {c: st.column_config.TextColumn(width="small", pinned=True) for c in ("Team", "Opp")}
+    cfg["Goalie"] = st.column_config.TextColumn("Goalie", pinned=True)
+    cfg["Role"] = st.column_config.TextColumn(width="small")
+    cfg["Start %"] = st.column_config.ProgressColumn(
+        format="%d%%", min_value=0, max_value=100, width="small",
+        help="Chance he starts: the starter model, moved by Daily Faceoff news, or pinned by an override")
+    cfg["Status"] = st.column_config.TextColumn(width="small", help="Daily Faceoff's report on him, or Override")
+    cfg["SV"] = st.column_config.NumberColumn("SV", format="%.1f", width="small",
+                                              help="Projected saves if he starts (includes the chance he is pulled)")
+    cfg["Median"] = st.column_config.NumberColumn(format="%.0f", width="small")
+    cfg["Range"] = st.column_config.TextColumn(width="small", help="10th to 90th percentile of his saves")
+    cfg["SA"] = st.column_config.NumberColumn("SA", format="%.1f", width="small", help="Shots on goal he faces")
+    cfg["GA"] = st.column_config.NumberColumn(format="%.2f", width="small")
+    cfg["SV%"] = st.column_config.NumberColumn(format="%.3f", width="small", help="Expected save percentage")
+    cfg["Pull %"] = st.column_config.NumberColumn(format="%.1%", width="small", help="Chance he doesn't finish")
+    cfg |= {c: st.column_config.ProgressColumn(format="%d%%", min_value=0, max_value=100, width="small") for c in pcols}
+    st.dataframe(t, hide_index=True, column_config=cfg, width="stretch", height=height)
+
+
 # ---------------------------------------------------------------- game lines
 
 def game_lines(p: pd.DataFrame, games: pd.DataFrame) -> pd.DataFrame:
@@ -324,6 +410,10 @@ def page_slate():
                     st.html(BOARD_CSS + html)
         st.caption("Fair = no-vig prices from the projected score; overtime and shootouts count, as books grade them. "
                    "Blue = the more likely side of each bet.")
+    kind = st.segmented_control("Players", ["Skaters", "Goalies"], default="Skaters", key="slate_kind") or "Skaters"
+    if kind == "Goalies":
+        slate_goalies(s, day, p, deps)
+        return
     c1, c2, c3 = st.columns([2, 2, 1])
     teams = c1.multiselect("Teams", sorted(p.team.unique()))
     pos = c2.multiselect("Position", ["C", "L", "R", "D"])
@@ -334,6 +424,26 @@ def page_slate():
     st.caption(f"{p.game_id.nunique()} games · {len(t)} skaters · built {s['built_at']}")
     show(t, height=720)
     st.download_button("Download CSV", t.to_csv(index=False), f"projections_{day}.csv", "text/csv")
+
+
+def slate_goalies(s: dict, day: str, p: pd.DataFrame, deps: dict):
+    if saves_state() is None:
+        st.info("No goalie projections cached yet. Run `python live.py` (or refresh.bat) first.")
+        return
+    c1, c2, c3 = st.columns([2, 2, 1])
+    teams = c1.multiselect("Teams", sorted(p.team.unique()), key="g_teams")
+    backups = c2.toggle("Include backups", value=False, key="g_backups")
+    sort = c3.selectbox("Sort by", ["SV", "SA", "Start %", "Pull %"] + GOALIE_PROP_NAMES, key="g_sort")
+    t = goalie_table(day, deps, backups=backups)
+    if t.empty:
+        st.info("No goalie projections for this date.")
+        return
+    t = t[t.Team.isin(teams)] if teams else t
+    t = t.sort_values(sort, ascending=False)
+    st.caption(f"{p.game_id.nunique()} games · {len(t)} goalies · built {saves_state()['built_at']}")
+    show_goalies(t, height=min(720, 35 * (len(t) + 1) + 3))
+    st.caption(GOALIE_NOTE)
+    st.download_button("Download CSV", t.to_csv(index=False), f"goalies_{day}.csv", "text/csv")
 
 
 # ---------------------------------------------------------------- Game
@@ -390,6 +500,12 @@ def page_game():
     st.markdown("**Defence**")
     dm = t[t.Line.str.startswith("D")]
     show(dm, height=fit(dm))
+    gt = goalie_table(day, deps, game_id=g.game_id)
+    if len(gt):
+        gt = gt[gt.Team == view].drop(columns=["Team", "Opp"])
+        st.markdown("**Goalies**")
+        show_goalies(gt, height=fit(gt))
+        st.caption(GOALIE_NOTE)
     st.markdown(f"**Projected {stat}, {view}**")
     # chart a copy without dotted names (Altair reads "o0.5" as a nested field)
     ch = t[["Player", "Slot", "TOI", "SOG", "PTS"]].assign(val=t[stat].to_numpy(), p_pt=t["o0.5 PTS"].to_numpy())

@@ -3,7 +3,7 @@ name: Refresh projections
 # Fetch finished NHL games, rebuild the tables, refit, cache the next few days' slate, and
 # publish the result to the release tagged `data`, which the Streamlit app downloads
 # (cloud.py). Data lives in the release, not in git, so the repo does not grow every run.
-# Scheduled runs only fire from the default branch, which must be `main`.
+# Run it by hand any time: Actions -> Refresh projections -> Run workflow.
 on:
   schedule:
     - cron: "0 13 * * *"    # 9:00 ET (8:00 in winter)
@@ -39,17 +39,11 @@ jobs:
       - name: Install
         run: pip install -r requirements.txt
 
-      - name: "Restore data from the last run (first run: the seed branch)"
+      - name: Restore data from the last run
         run: |
-          if gh release view data > /dev/null 2>&1; then
-            gh release download data -p bundle.tar -D dist
-            python publish.py unpack dist/bundle.tar
-            rm dist/bundle.tar
-          else
-            git fetch --depth 1 origin seed
-            git checkout FETCH_HEAD -- data
-            git reset -q data
-          fi
+          gh release download data -p bundle.tar -D dist
+          python publish.py unpack dist/bundle.tar
+          rm dist/bundle.tar
 
       - name: Refresh and project
         run: python live.py
@@ -63,4 +57,5 @@ jobs:
             gh release create data --title "Projection data" --notes "Written by the refresh workflow; read by the app. Do not edit."
           # data files first, the manifest last, so the app never sees a manifest that points ahead of its files
           gh release upload data dist/bundle.tar dist/state.pkl dist/player_games.parquet dist/backtest_app.parquet --clobber
+          if [ -f dist/saves.pkl ]; then gh release upload data dist/saves.pkl --clobber; fi
           gh release upload data dist/manifest.json --clobber

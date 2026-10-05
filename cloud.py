@@ -10,6 +10,7 @@ Release assets read by the app:
     state.pkl              -> data/live/state.pkl            (the cached slate, coefficients)
     player_games.parquet   -> data/lake/player_games.parquet (history for the Player page)
     backtest_app.parquet   -> data/backtest/backtest_last.parquet (calibration chart)
+    saves.pkl              -> data/saves/models/live.pkl     (the goalie saves slate)
 """
 from __future__ import annotations
 
@@ -28,7 +29,9 @@ DEFAULT_REPO = "ajpayzant/NHL-Game-Projections"
 TAG = "data"
 ASSETS = {"state.pkl": C.DATA / "live" / "state.pkl",
           "player_games.parquet": C.LAKE / "player_games.parquet",
-          "backtest_app.parquet": C.DATA / "backtest" / "backtest_last.parquet"}
+          "backtest_app.parquet": C.DATA / "backtest" / "backtest_last.parquet",
+          "saves.pkl": C.DATA / "saves" / "models" / "live.pkl"}
+OPTIONAL = {"saves.pkl"}  # the goalie page is blank without it; the skater pages must not wait on it
 LOCAL_MANIFEST = C.DATA / "live" / "manifest.json"
 
 
@@ -71,13 +74,19 @@ def sync() -> str | None:
     except Exception:
         return None  # offline or no release yet: keep whatever we have
     local = json.loads(LOCAL_MANIFEST.read_text()) if LOCAL_MANIFEST.exists() else {}
-    missing = [n for n, p in ASSETS.items() if not p.exists()]
+    missing = [n for n, p in ASSETS.items() if not p.exists() and n not in OPTIONAL]
     if remote.get("built_at") != local.get("built_at") or missing:
         try:
             for name, path in ASSETS.items():
-                _download(name, path)
+                if name not in OPTIONAL:
+                    _download(name, path)
         except Exception:
             return local.get("built_at")  # mid-upload or offline: keep our copy, try again next time
+        for name in OPTIONAL:
+            try:
+                _download(name, ASSETS[name])
+            except Exception:
+                pass
         LOCAL_MANIFEST.parent.mkdir(parents=True, exist_ok=True)
         LOCAL_MANIFEST.write_text(json.dumps(remote))
     return remote.get("built_at")

@@ -290,6 +290,7 @@ def show_goalies(t: pd.DataFrame, height="auto"):
     else:
         t[pcols] = (t[pcols] * 100).round()
     t["Start %"] = (t["Start %"] * 100).round()
+    t["Pull %"] = t["Pull %"] * 100
     cfg = {c: st.column_config.TextColumn(width="small", pinned=True) for c in ("Team", "Opp")}
     cfg["Goalie"] = st.column_config.TextColumn("Goalie", pinned=True)
     cfg["Role"] = st.column_config.TextColumn(width="small")
@@ -304,7 +305,7 @@ def show_goalies(t: pd.DataFrame, height="auto"):
     cfg["SA"] = st.column_config.NumberColumn("SA", format="%.1f", width="small", help="Shots on goal he faces")
     cfg["GA"] = st.column_config.NumberColumn(format="%.2f", width="small")
     cfg["SV%"] = st.column_config.NumberColumn(format="%.3f", width="small", help="Expected save percentage")
-    cfg["Pull %"] = st.column_config.NumberColumn(format="%.1%", width="small", help="Chance he doesn't finish")
+    cfg["Pull %"] = st.column_config.NumberColumn(format="%.1f%%", width="small", help="Chance he doesn't finish")
     cfg |= {c: st.column_config.ProgressColumn(format="%d%%", min_value=0, max_value=100, width="small") for c in pcols}
     st.dataframe(t, hide_index=True, column_config=cfg, width="stretch", height=height)
 

@@ -326,11 +326,29 @@ def game_lines(p: pd.DataFrame, games: pd.DataFrame) -> pd.DataFrame:
     lines = [markets.fair_total({t: P["over"][t][i] for t in markets.TOTALS}) for i in range(len(g))]
     g["total"] = lines
     g["p_over"] = [P["over"][t][i] for i, t in enumerate(lines)]
+    for t in ALT_TOTALS:
+        g[_alt(t)] = P["over"][t]
     return g
+
+
+ALT_TOTALS = [4.5, 5.5, 6.5, 7.5, 8.5]
+_alt = lambda t: f"p_over_{int(t * 10)}"   # column name (no dots, so itertuples keeps it)
 
 
 def _fmt(p: float) -> str:
     return f"{american(p)} ({p:.0%})"
+
+
+def alt_totals_game(g) -> pd.DataFrame:
+    """Over / under at every alternate total for one game."""
+    return pd.DataFrame([{"Total": f"{t:g}", "Over": _fmt(g[_alt(t)]), "Under": _fmt(1 - g[_alt(t)])}
+                         for t in ALT_TOTALS])
+
+
+def alt_totals_slate(gl: pd.DataFrame) -> pd.DataFrame:
+    """The over at every alternate total, one row per game."""
+    return pd.DataFrame([{"Game": f"{r['away']} @ {r['home']}", **{f"o{t:g}": _fmt(r[_alt(t)]) for t in ALT_TOTALS}}
+                         for _, r in gl.iterrows()])
 
 
 BOARD_CSS = """<style>
@@ -411,6 +429,9 @@ def page_slate():
                     st.html(BOARD_CSS + html)
         st.caption("Fair = no-vig prices from the projected score; overtime and shootouts count, as books grade them. "
                    "Blue = the more likely side of each bet.")
+        if len(gl):
+            st.markdown("**Alternate totals** (fair price for the over; the under is the other side)")
+            st.dataframe(alt_totals_slate(gl), hide_index=True, width="stretch")
     kind = st.segmented_control("Players", ["Skaters", "Goalies"], default="Skaters", key="slate_kind") or "Skaters"
     if kind == "Goalies":
         slate_goalies(s, day, p, deps)
@@ -489,6 +510,8 @@ def page_game():
     if len(gl):
         st.html(BOARD_CSS + board_html(gl.iloc[0]))
         st.caption("Fair (no-vig) prices from the projected score; overtime and shootouts count, as books grade them.")
+        with st.expander("Alternate totals"):
+            st.dataframe(alt_totals_game(gl.iloc[0]), hide_index=True)
     st.divider()
     c1, c2 = st.columns([2, 3])
     view = c1.segmented_control("Team", [g.away, g.home], default=g.away, key=f"gv_{g.game_id}") or g.away

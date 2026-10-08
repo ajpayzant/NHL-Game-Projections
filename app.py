@@ -327,6 +327,9 @@ def game_lines(p: pd.DataFrame, games: pd.DataFrame) -> pd.DataFrame:
     g["total"] = lines
     g["p_over"] = [P["over"][t][i] for i, t in enumerate(lines)]
     g["over_by_line"] = [{t: float(P["over"][t][i]) for t in markets.TOTALS} for i in range(len(g))]  # alt totals
+    # alt puck lines: P(the favourite, by expected goals, wins by more than k)
+    g["fav_by"] = [{k: float((P["home_by"] if lh >= la else P["away_by"])[k][i]) for k in markets.SPREADS}
+                   for i, (lh, la) in enumerate(zip(g.lh, g.la))]
     return g
 
 
@@ -362,47 +365,51 @@ def _cell(line: str, p: float, fav: bool) -> str:
             f"<div class='p'>{p:.0%}</div></td>")
 
 
-def _total_cell(bid: str, side: str, line: float, p: float, fav: bool) -> str:
-    """A total cell with small up / down arrows that step the line (see _total_script)."""
-    return (f"<td id='{bid}-{side}' class='{'fav' if fav else ''}'><div class='o'><span class='tl'>{side}{line:g}</span> "
-            f"<span class='to'>{american(p)}</span><span class='ar' title='Alternate totals'>"
+def _step_cell(bid: str, key: str, label: str, p: float, fav: bool, title: str) -> str:
+    """A price cell with small up / down arrows that step its market's line (see _step_script).
+    key = market letter + side, e.g. 'to' (total over) or 'pf' (puck line favourite)."""
+    return (f"<td id='{bid}-{key}' class='{'fav' if fav else ''}'><div class='o'><span class='tl'>{label}</span> "
+            f"<span class='to'>{american(p)}</span><span class='ar' data-g='{key[0]}' title='{title}'>"
             f"<b data-d='1'>&#9650;</b><b data-d='-1'>&#9660;</b></span></div><div class='p'>{p:.0%}</div></td>")
 
 
-def _total_script(bid: str, over: dict, line: float) -> str:
-    """Steps the board's total through every alternate line in the browser (no rerun). The
-    prices are formatted here, so they match the rest of the app exactly."""
-    lines = sorted(over)
-    data = [[f"{t:g}", american(over[t]), f"{over[t]:.0%}", american(1 - over[t]), f"{1 - over[t]:.0%}",
-             over[t] >= 0.5, over[t] < 0.5] for t in lines]
+def _step_rows(pairs: list) -> list:
+    """[label, price, pct, tint] for both cells of each line, formatted here so the stepped
+    prices match the rest of the app exactly. pairs = [(label_a, p_a, tint_a, label_b, p_b, tint_b)]."""
+    return [[la, american(pa), f"{pa:.0%}", bool(fa), lb, american(pb), f"{pb:.0%}", bool(fb)]
+            for la, pa, fa, lb, pb, fb in pairs]
+
+
+def _step_script(bid: str, grp: str, keys: tuple[str, str], rows: list, start: int) -> str:
+    """Steps one market of a board through its alternate lines in the browser (no rerun)."""
     return f"""<script>(function(){{
-const L={json.dumps(data)}, id="{bid}"; let i={lines.index(line)};
+const L={json.dumps(rows)}, id="{bid}"; let i={start};
 const b=document.getElementById(id); if(!b) return;
-const o=document.getElementById(id+"-o"), u=document.getElementById(id+"-u");
+const a=document.getElementById(id+"-{keys[0]}"), c=document.getElementById(id+"-{keys[1]}");
 const put=(td,l,od,pc,fav)=>{{td.querySelector(".tl").textContent=l;td.querySelector(".to").textContent=od;
   td.querySelector(".p").textContent=pc;td.classList.toggle("fav",fav);}};
-b.querySelectorAll(".ar b").forEach(a=>a.addEventListener("click",()=>{{
-  i=Math.max(0,Math.min(L.length-1,i+Number(a.dataset.d)));const r=L[i];
-  put(o,"o"+r[0],r[1],r[2],r[5]);put(u,"u"+r[0],r[3],r[4],r[6]);}}));
+b.querySelectorAll(".ar[data-g='{grp}'] b").forEach(x=>x.addEventListener("click",()=>{{
+  i=Math.max(0,Math.min(L.length-1,i+Number(x.dataset.d)));const r=L[i];
+  put(a,r[0],r[1],r[2],r[3]);put(c,r[4],r[5],r[6],r[7]);}}));
 }})();</script>"""
 
 
 def board_html(g, small: bool = False, title: str = "") -> str:
     """A compact sportsbook-style card: win-probability bar, then away / home rows with fair
     moneyline, puck line and total (odds bold, probability under it, favourite tinted). The
-    total's arrows step through the alternate totals."""
+    arrows on the puck line and the total step through their alternate lines."""
     bid = f"gb{g.game_id}{'s' if small else ''}"
     pa, ph = 1 - g.p_home, g.p_home
     home_fav = g.lh >= g.la
+    p15 = g.fav_by[1.5]
     rows = ""
     for side, team, lam, p_win in (("away", g.away, g.la, pa), ("home", g.home, g.lh, ph)):
         fav = (side == "home") == home_fav
-        own_m15 = g.p_home_m15 if side == "home" else g.p_away_m15
-        opp_m15 = g.p_away_m15 if side == "home" else g.p_home_m15
         # favourite -1.5 / underdog +1.5 (= not losing by 2+); tint whichever side is above 50%
-        pl = _cell("-1.5 ", own_m15, own_m15 >= 0.5) if fav else _cell("+1.5 ", 1 - opp_m15, 1 - opp_m15 > 0.5)
-        tot = _total_cell(bid, "o", g.total, g.p_over, g.p_over >= 0.5) if side == "away" else \
-            _total_cell(bid, "u", g.total, 1 - g.p_over, g.p_over < 0.5)
+        pl = _step_cell(bid, "pf", "-1.5", p15, p15 >= 0.5, "Alternate puck lines") if fav else \
+            _step_cell(bid, "pd", "+1.5", 1 - p15, 1 - p15 > 0.5, "Alternate puck lines")
+        tot = _step_cell(bid, "to", f"o{g.total:g}", g.p_over, g.p_over >= 0.5, "Alternate totals") if side == "away" else \
+            _step_cell(bid, "tu", f"u{g.total:g}", 1 - g.p_over, g.p_over < 0.5, "Alternate totals")
         rows += (f"<tr><td class='t'><span class='tm'>{team}</span> <span class='xg'>{lam:.2f} xG</span></td>"
                  f"{_cell('', p_win, p_win >= 0.5)}{pl}{tot}</tr>")
     bar = (f"<div class='bar'><span style='width:{pa:.1%};background:#eb6834'></span>"
@@ -410,7 +417,12 @@ def board_html(g, small: bool = False, title: str = "") -> str:
            f"<div class='barlab'><span>{g.away} {pa:.0%}</span><span>win probability</span><span>{ph:.0%} {g.home}</span></div>")
     ttl = f"<div class='ttl'>{title}</div>" if title else ""
     return (f"<div class='gb{' sm' if small else ''}' id='{bid}'>{ttl}{bar}<table><tr><th class='t'></th><th>Moneyline</th>"
-            f"<th>Puck line</th><th>Total</th></tr>{rows}</table></div>" + _total_script(bid, g.over_by_line, g.total))
+            f"<th>Puck line</th><th>Total</th></tr>{rows}</table></div>"
+            + _step_script(bid, "t", ("to", "tu"), _step_rows(
+                [(f"o{t:g}", o, o >= 0.5, f"u{t:g}", 1 - o, o < 0.5) for t, o in sorted(g.over_by_line.items())]),
+                sorted(g.over_by_line).index(g.total))
+            + _step_script(bid, "p", ("pf", "pd"), _step_rows(
+                [(f"-{k:g}", q, q >= 0.5, f"+{k:g}", 1 - q, 1 - q > 0.5) for k, q in sorted(g.fav_by.items())]), 0))
 
 
 # ---------------------------------------------------------------- Slate
@@ -442,7 +454,7 @@ def page_slate():
                 with c:
                     st.html(BOARD_CSS + html, unsafe_allow_javascript=True)
         st.caption("Fair = no-vig prices from the projected score; overtime and shootouts count, as books grade them. "
-                   "Blue = the more likely side of each bet. The arrows on a total step through alternate totals.")
+                   "Blue = the more likely side of each bet. The arrows on the puck line and total step through alternate lines.")
     kind = st.segmented_control("Players", ["Skaters", "Goalies"], default="Skaters", key="slate_kind") or "Skaters"
     if kind == "Goalies":
         slate_goalies(s, day, p, deps)
@@ -521,7 +533,7 @@ def page_game():
     if len(gl):
         st.html(BOARD_CSS + board_html(gl.iloc[0]), unsafe_allow_javascript=True)
         st.caption("Fair (no-vig) prices from the projected score; overtime and shootouts count, as books grade them. "
-                   "The arrows on the total step through alternate totals.")
+                   "The arrows on the puck line and total step through alternate lines.")
     st.divider()
     c1, c2 = st.columns([2, 3])
     view = c1.segmented_control("Team", [g.away, g.home], default=g.away, key=f"gv_{g.game_id}") or g.away

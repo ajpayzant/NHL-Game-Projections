@@ -13,10 +13,10 @@ with sync_playwright() as p:
     pg.wait_for_timeout(1500)
     n = pg.locator(".gb.sm").count()
     second = pg.locator(".gb.sm").nth(1)
-    rd = lambda c: c.locator("[id$='-o']").inner_text().replace("\n", " ")
+    rd = lambda c: c.locator("[id$='-pf']").inner_text().replace("\n", " ")
     before = [rd(pg.locator(".gb.sm").nth(i)) for i in range(2)]
-    second.locator(".ar b[data-d='1']").first.click()
-    second.locator(".ar b[data-d='1']").first.click()
+    second.locator(".ar[data-g='p'] b[data-d='1']").first.click()
+    second.locator(".ar[data-g='p'] b[data-d='1']").first.click()
     after = [rd(pg.locator(".gb.sm").nth(i)) for i in range(2)]
     print(f"{n} cards | card 1 {before[0]} -> {after[0]} (untouched) | card 2 {before[1]} -> {after[1]}")
     pg.locator(".gb.sm").nth(0).screenshot(path=str(OUT / "alt_slate_card.png"))

@@ -28,6 +28,7 @@ OT_TILT = 0.53              # 0 = OT is a coin flip, 1 = OT win share follows ex
 TIE_BOOST = 0.77            # tied games are tighter than independent scoring implies (more OT)
 STRETCH = 1.40              # >1 widens the gap: summed player projections compress team differences
 TOTALS = [x + 0.5 for x in range(3, 10)]
+SPREADS = [1.5, 2.5, 3.5]   # puck lines: the favourite -k / the underdog +k
 
 
 def _stretch(lh, la, s):
@@ -79,6 +80,8 @@ def game_probs(lam_h, lam_a, **kw) -> dict:
         "home_win": (F * (margin > 0)).sum((1, 2)),
         "home_m15": (F * (margin >= 2)).sum((1, 2)),    # home -1.5 covers
         "away_m15": (F * (margin <= -2)).sum((1, 2)),   # away -1.5 covers
+        "home_by": {k: (F * (margin > k)).sum((1, 2)) for k in SPREADS},    # home -k covers
+        "away_by": {k: (F * (margin < -k)).sum((1, 2)) for k in SPREADS},   # away -k covers
         "over": {t: (F * (total > t)).sum((1, 2)) for t in TOTALS},
         "reg_tie": reg_tie,
         "exp_total": (F * total).sum((1, 2)),

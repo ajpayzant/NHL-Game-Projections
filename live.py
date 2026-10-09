@@ -86,6 +86,42 @@ def roster(team: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def add_unlisted(rosters: dict[str, pd.DataFrame], pg: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Add skaters the NHL's current-roster list leaves out, mostly players on injured reserve
+    (e.g. a defenceman back from injury whom Daily Faceoff dresses tonight): anyone whose last
+    game, this season or last, was for a team playing, who is on none of today's rosters, and
+    whose NHL player record still has him on that team. Without this he cannot be projected and
+    his team is projected a skater short."""
+    on = set().union(*[set(r.player.astype(int)) for r in rosters.values() if len(r)])
+    last = pg.sort_values("date").drop_duplicates("player", keep="last")
+    cand = last[(last.season >= C.CURRENT_SEASON - 1) & last.team.astype(str).isin(rosters) & ~last.player.isin(on)]
+
+    def record(pid: int):
+        try:
+            return fetch.get_json(f"{C.NHL_WEB}/player/{int(pid)}/landing")
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(6) as ex:
+        recs = list(ex.map(record, cand.player))
+    added = {}
+    for (pid, team), d in zip(zip(cand.player, cand.team.astype(str)), recs):
+        if not d or d.get("currentTeamAbbrev") != team or not d.get("isActive", True) or d.get("position") == "G":
+            continue
+        first, lastn = d["firstName"]["default"], d["lastName"]["default"]
+        added.setdefault(team, []).append({
+            "player": int(pid), "name": f"{first} {lastn}", "last": lastn, "pos": d.get("position"),
+            "number": d.get("sweaterNumber"), "shoots": d.get("shootsCatches"), "headshot": d.get("headshot"),
+            "birth": d.get("birthDate"), "team": team})
+    out = dict(rosters)
+    for team, rows in added.items():
+        out[team] = pd.concat([rosters[team], pd.DataFrame(rows)], ignore_index=True)
+    if added:
+        print("added to rosters (not on the NHL's list): "
+              + "; ".join(f"{t} {', '.join(r['name'] for r in rows)}" for t, rows in sorted(added.items())))
+    return out
+
+
 def _dfo_page(url: str) -> dict:
     html = requests.get(url, headers={"User-Agent": C.BROWSER_UA}, timeout=C.REQUEST_TIMEOUT).text
     m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S)
@@ -426,7 +462,7 @@ def build_state(fetch_new: bool = True, verbose: bool = True) -> dict:
                             columns=["game_id", "date", "season", "opp", "goalie", "event", "xg_on", "target_net_empty"])
     games = schedule()
     teams = sorted(set(games.home) | set(games.away)) if len(games) else []
-    rosters = {t: roster(t) for t in teams}
+    rosters = add_unlisted({t: roster(t) for t in teams}, pg)
     ppend, tpend = _pending(games, rosters, pg) if len(games) else (pd.DataFrame(), pd.DataFrame())
     f = features.build(pd.concat([pg, ppend], ignore_index=True), pd.concat([tg, tpend], ignore_index=True), shots)
     hist = f[~f.pending]

@@ -298,9 +298,10 @@ def assign_spots(dep: dict, info: pd.DataFrame) -> dict[tuple[str, int, str], in
     chart: dict[tuple[str, int, str], int] = {}
     later = []
     for p, v in dep["skaters"].items():
-        grp = "D" if pos.get(p) == "D" else "F"
-        line = int(v.get("line") or (3 if grp == "D" else 4))
         spot = v.get("spot")
+        # someone not on today's roster (a late call-up) has no position: Daily Faceoff's spot decides
+        grp = "D" if pos.get(p) == "D" or (pos.get(p) is None and spot in D_SPOTS) else "F"
+        line = int(v.get("line") or (3 if grp == "D" else 4))
         if spot in (F_SPOTS if grp == "F" else D_SPOTS) and (grp, line, spot) not in chart:
             chart[(grp, line, spot)] = p
         else:
@@ -308,7 +309,7 @@ def assign_spots(dep: dict, info: pd.DataFrame) -> dict[tuple[str, int, str], in
     for p, grp, line in later:
         spots = F_SPOTS if grp == "F" else D_SPOTS
         nat = POS_SPOT.get(pos.get(p)) if grp == "F" else ("LD" if shoots.get(p) == "L" else "RD")
-        order = [nat] + [s for s in spots if s != nat]
+        order = ([nat] if nat in spots else []) + [s for s in spots if s != nat]
         lines = [line] + [l for l in range(1, 5 if grp == "F" else 4) if l != line]
         for l in lines:
             free = [s for s in order if (grp, l, s) not in chart]

@@ -48,11 +48,6 @@ jobs:
       - name: Refresh and project
         run: python live.py
 
-      - name: Fetch sportsbook odds (Edges tab; skipped without the ODDS_API_KEY secret)
-        env:
-          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-        run: python odds.py
-
       - name: Pack
         run: python publish.py pack
 
@@ -63,5 +58,4 @@ jobs:
           # data files first, the manifest last, so the app never sees a manifest that points ahead of its files
           gh release upload data dist/bundle.tar dist/state.pkl dist/player_games.parquet dist/backtest_app.parquet --clobber
           if [ -f dist/saves.pkl ]; then gh release upload data dist/saves.pkl --clobber; fi
-          if [ -f dist/odds.parquet ]; then gh release upload data dist/odds.parquet --clobber; fi
           gh release upload data dist/manifest.json --clobber

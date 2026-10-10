@@ -2,14 +2,13 @@
 
     python odds.py            # fetch game lines + today's player props -> data/odds/odds.parquet
 
-Needs an API key in the environment (ODDS_API_KEY) or in .streamlit/secrets.toml
-(odds_api_key = "..."); without one this does nothing. The refresh workflow runs it after
-live.py with the key from the repo's secrets.
+Odds are fetched only on demand: the Edges tab's "Refresh odds" button (or this script), never
+by the scheduled refresh, to save API credits. Needs an API key: odds_api_key in the Streamlit
+app's secrets or in .streamlit/secrets.toml locally (or ODDS_API_KEY in the environment).
 
-Credits: the game lines for every NHL game cost 3 per fetch (3 markets x 1 region); player
-props are fetched one game at a time and cost 6 per game (6 markets x 1 region), and only for
-games starting in the next PROPS_HOURS hours (books post props on game day). At ~7 games a day
-and 3 fetches a day that is about 4,000 credits a month.
+Credits per fetch: 3 for the game lines of every NHL game (3 markets x 1 region), plus 6 per
+game for player props (fetched one game at a time, only for games starting in the next
+PROPS_HOURS hours, since books post props on game day).
 
 Rows (one per book, market and outcome):
     event_id, commence_time, home, away, book, market, name, player, point, price, last_update, fetched_at

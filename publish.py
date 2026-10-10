@@ -23,7 +23,6 @@ DIST = C.ROOT / "dist"
 BACKTEST_APP = C.DATA / "backtest" / "backtest_app.parquet"
 SAVES_LAKE = C.DATA / "saves" / "lake"
 SAVES_STATE = C.DATA / "saves" / "models" / "live.pkl"
-ODDS = C.DATA / "odds" / "odds.parquet"
 APP_BACKTEST_COLS = ["game_type", "gp_16", "points", "goals", "assists", "sog", "ppp",
                      "p_pts_1", "p_g_1", "p_a_1", "p_sog_2", "p_sog_3", "p_sog_4", "p_ppp_1"]
 
@@ -50,8 +49,6 @@ def pack() -> None:
     shutil.copy(BACKTEST_APP, DIST / "backtest_app.parquet")
     if SAVES_STATE.exists():  # a failed goalie build leaves the last published saves.pkl in place
         shutil.copy(SAVES_STATE, DIST / "saves.pkl")
-    if ODDS.exists():  # only when an odds API key is set
-        shutil.copy(ODDS, DIST / "odds.parquet")
     import pickle
     with open(C.DATA / "live" / "state.pkl", "rb") as fh:
         built = pickle.load(fh)["built_at"]

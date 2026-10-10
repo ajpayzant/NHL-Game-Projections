@@ -11,7 +11,6 @@ Release assets read by the app:
     player_games.parquet   -> data/lake/player_games.parquet (history for the Player page)
     backtest_app.parquet   -> data/backtest/backtest_last.parquet (calibration chart)
     saves.pkl              -> data/saves/models/live.pkl     (the goalie saves slate)
-    odds.parquet           -> data/odds/odds.parquet         (sportsbook prices, Edges tab)
 """
 from __future__ import annotations
 
@@ -31,9 +30,8 @@ TAG = "data"
 ASSETS = {"state.pkl": C.DATA / "live" / "state.pkl",
           "player_games.parquet": C.LAKE / "player_games.parquet",
           "backtest_app.parquet": C.DATA / "backtest" / "backtest_last.parquet",
-          "saves.pkl": C.DATA / "saves" / "models" / "live.pkl",
-          "odds.parquet": C.DATA / "odds" / "odds.parquet"}
-OPTIONAL = {"saves.pkl", "odds.parquet"}  # the goalie page is blank without it; the skater pages must not wait on it
+          "saves.pkl": C.DATA / "saves" / "models" / "live.pkl"}
+OPTIONAL = {"saves.pkl"}  # the goalie page is blank without it; the skater pages must not wait on it
 LOCAL_MANIFEST = C.DATA / "live" / "manifest.json"
 
 

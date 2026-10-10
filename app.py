@@ -979,6 +979,9 @@ def page_model():
 
 # ---------------------------------------------------------------- Edges
 
+ODDS_COOLDOWN_MIN = 2   # the Refresh odds button: stops double clicks and public-app spam
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def _odds(mtime: float) -> pd.DataFrame | None:
     return odds.load()
@@ -997,7 +1000,7 @@ def goalie_lines(day: str, deps: dict) -> pd.DataFrame:
             k = json.dumps([d.get("goalie"), d.get("goalie_status", ""), d.get("source", "")])
             for p in _team_goalies(S["built_at"], int(g.game_id), team, k):
                 rows.append({"game_id": int(g.game_id), "team": team, "goalie": nm.get(p["goalie"], p["name"]),
-                             "p_over": {float(c[7:]): v for c, v in p.items() if c.startswith("p_over_")}})
+                             "mean": p["mean"], "p_over": {float(c[7:]): v for c, v in p.items() if c.startswith("p_over_")}})
     return pd.DataFrame(rows)
 
 
@@ -1006,20 +1009,24 @@ def page_edges():
     day = pick_day(s)
     st.title(f"Edges · {day}")
     o = _odds(odds.ODDS_FILE.stat().st_mtime) if odds.ODDS_FILE.exists() else None
-    key_ok = odds.api_key() is not None
-    if key_ok:
+    head, btn = st.columns([5, 1], vertical_alignment="bottom")
+    if odds.api_key() is not None:   # odds update only when someone clicks (no automatic fetches)
         last = pd.Timestamp(o.fetched_at.iloc[0]) if o is not None and len(o) else None
-        wait = last is not None and pd.Timestamp.now(tz="UTC") - last < pd.Timedelta(minutes=15)
-        if st.sidebar.button("Refresh odds", disabled=wait,
-                             help="Fetch the latest prices now (uses API credits; at most every 15 minutes)."):
+        wait = last is not None and pd.Timestamp.now(tz="UTC") - last < pd.Timedelta(minutes=ODDS_COOLDOWN_MIN)
+        if btn.button("Refresh odds", type="primary", disabled=wait, width="stretch",
+                      help=f"Fetch the latest sportsbook prices now (about 3 API credits plus 6 per game). "
+                           f"At most once every {ODDS_COOLDOWN_MIN} minutes."):
             with st.spinner("Fetching sportsbook odds..."):
-                odds.fetch(verbose=False)
+                try:
+                    odds.fetch(verbose=False)
+                except Exception as e:
+                    st.error(f"Could not fetch odds: {e}")
+                    st.stop()
             _odds.clear()
             st.rerun()
     if o is None or o.empty:
-        st.info("No sportsbook odds yet. They are fetched by the refresh (`python odds.py`) once an API key "
-                "from the-odds-api.com is set: `ODDS_API_KEY` in the GitHub repo's Actions secrets, or "
-                "`odds_api_key` in `.streamlit/secrets.toml` locally.")
+        head.info("No sportsbook odds yet. Click **Refresh odds** to fetch them (needs `odds_api_key` in the "
+                  "app's secrets, or in `.streamlit/secrets.toml` locally).")
         return
     p = projections(day)
     if p.empty:
@@ -1027,25 +1034,29 @@ def page_edges():
         return
     deps = deployments(day)
     df, stats = edges.compare(o, s["games"], p, s["coefs"]["alpha"], goalie_lines(day, deps))
-    st.caption(f"Odds fetched {when(o.fetched_at.iloc[0])} from {o.book.nunique()} books · projections built "
-               f"{s['built_at']} · {len(df):,} priced bets")
+    head.caption(f"Odds fetched **{when(o.fetched_at.iloc[0])}** from {o.book.nunique()} books · projections built "
+                 f"{s['built_at']} · {len(df):,} priced bets")
     if df.empty:
         st.info("No pregame odds match this date's games yet.")
         return
-    c1, c2, c3, c4, c5 = st.columns([2, 2, 1, 1, 1])
+    c1, c2, c3, c4, c5, c6 = st.columns([2, 2, 1, 1, 1, 1])
     kinds = ["Moneyline", "Puck line", "Total", "PTS", "SOG", "G", "A", "PPP", "Saves"]
     kind = c1.multiselect("Bet type", [k for k in kinds if k in set(df.kind)])
     books = c2.multiselect("Books", sorted(df.book.unique()))
     best = c3.toggle("Best price", value=True, help="One row per bet: the book with the best price")
+    both = c6.toggle("Both sides posted", value=True, key="edge_both",
+                     help="Only bets a book posts both sides of, so there is a market price to compare with. "
+                          "Off shows one-sided longshots too, where the model's tail is least reliable.")
     min_ev = c4.number_input("Min EV %", value=0.0, step=1.0)
     sort = c5.selectbox("Sort by", ["EV %", "Edge"], key="edge_sort", help="EV % favours long prices; Edge ranks by the "
                         "probability gap in percentage points")
     q = df[df.kind.isin(kind)] if kind else df
     q = q[q.book.isin(books)] if books else q
+    q = q[q.market_p.notna()] if both else q
     if best:
         q = q.sort_values("dec", ascending=False).drop_duplicates(["game_id", "market", "bet"])
     q = q[q.ev * 100 >= min_ev].sort_values("ev" if sort == "EV %" else "edge", ascending=False)
-    t = pd.DataFrame({"Game": q.game, "Type": q.kind, "Bet": q.bet, "Book": q.book,
+    t = pd.DataFrame({"Game": q.game, "Type": q.kind, "Bet": q.bet, "Proj": q.proj, "Book": q.book,
                       "Price": [f"{x:+.0f}" for x in q.price], "Model %": q.p_model * 100,
                       "Book no-vig %": q.novig * 100, "Market %": q.market_p * 100, "Edge": q.edge * 100,
                       "EV %": q.ev * 100, "Books": q.books})
@@ -1054,6 +1065,8 @@ def page_edges():
         "Game": st.column_config.TextColumn(pinned=True),
         "Bet": st.column_config.TextColumn("Bet", pinned=True),
         "Type": st.column_config.TextColumn(width="small"), "Book": st.column_config.TextColumn(width="small"),
+        "Proj": st.column_config.NumberColumn(format="%.2f", width="small",
+                                              help="The model's projected number: SOG, points, saves, total goals..."),
         "Price": st.column_config.TextColumn(width="small", help="The book's price for this bet"),
         "Model %": pct("The model's probability (goalie saves: as if he starts)"),
         "Book no-vig %": pct("This book's probability with its margin removed (needs both sides posted)"),

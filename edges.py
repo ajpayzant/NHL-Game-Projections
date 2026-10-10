@@ -14,12 +14,14 @@ market) and the expected value of a $1 bet at that book's price.
 """
 from __future__ import annotations
 
+import difflib
+
 import numpy as np
 import pandas as pd
 
 import markets
 import model
-from live import key
+from live import _surname, key
 
 PROPS = {"player_points": ("PTS", "pts_hat", "pts"), "player_shots_on_goal": ("SOG", "sog_hat", "sog"),
          "player_goals": ("G", "g_hat", "g"), "player_assists": ("A", "a_hat", "a"),
@@ -65,6 +67,7 @@ def compare(odds: pd.DataFrame, games: pd.DataFrame, proj: pd.DataFrame, alpha: 
     o["pair"] = np.where(o.market == "spreads", o.point.abs(), o.point.fillna(0.0))
     o["novig"] = _devig(o)
     o["p_model"] = np.nan
+    o["proj"] = np.nan   # the model's projected number for the stat (total goals, SOG, saves...)
     gm = games.set_index("game_id")
     lam = proj.groupby(["game_id", "team"]).g_hat.sum()
 
@@ -90,20 +93,29 @@ def compare(odds: pd.DataFrame, games: pd.DataFrame, proj: pd.DataFrame, alpha: 
                 over = str(r["name"]).lower() == "over"
                 win = (total > r.point) if over else (total < r.point)
                 p = F[win].sum() / max(1 - F[total == r.point].sum(), 1e-9)
+                o.at[i, "proj"] = float((F * total).sum())
             o.at[i, "p_model"] = p
 
     # ---- skater props
-    pr = proj.assign(k=proj["name"].map(key))
+    pr = proj.assign(k=proj["name"].map(key), sur=proj["name"].map(_surname))
     look = {(gid, k): row for gid, k, row in zip(pr.game_id, pr.k, pr.itertuples(index=False))}
+    # spelling variants ("Dmitriy" / "Dmitri", "Maxwell" / "Max"): a surname unique in that game
+    once = pr.groupby(["game_id", "sur"]).sur.transform("size") == 1
+    by_sur = {(gid, s): row for gid, s, row, u in zip(pr.game_id, pr.sur, pr.itertuples(index=False), once) if u}
     sk = o[o.market.isin(list(PROPS))]
     matched = 0
     for i, r in sk.iterrows():
         row = look.get((r.game_id, key(r.player)))
+        if row is None:
+            row = by_sur.get((r.game_id, _surname(r.player)))
+            if row is not None and not _same_first(row.name, r.player):   # Florian vs Arber Xhekaj
+                row = None
         if row is None or r.point is None or not np.isfinite(r.point) or float(r.point).is_integer():
             continue
         _, col, a = PROPS[r.market]
         p_over = float(model.prob_at_least([getattr(row, col)], alpha[a], int(np.floor(r.point)) + 1)[0])
         o.at[i, "p_model"] = p_over if str(r["name"]).lower() == "over" else 1 - p_over
+        o.at[i, "proj"] = getattr(row, col)
         o.at[i, "team"] = row.team
         matched += 1
     stats["skater props"], stats["skater props matched"] = len(sk), matched
@@ -112,16 +124,18 @@ def compare(odds: pd.DataFrame, games: pd.DataFrame, proj: pd.DataFrame, alpha: 
     sv = o[o.market == "player_total_saves"]
     gmatch = 0
     if goalies is not None and len(goalies):
-        gl = {(gid, key(n)): (t, d) for gid, n, t, d in zip(goalies.game_id, goalies.goalie, goalies.team, goalies.p_over)}
+        gl = {(gid, key(n)): (t, d, m) for gid, n, t, d, m in
+              zip(goalies.game_id, goalies.goalie, goalies.team, goalies.p_over, goalies["mean"])}
         for i, r in sv.iterrows():
             hit = gl.get((r.game_id, key(r.player)))
             if hit is None or r.point is None or not np.isfinite(r.point) or float(r.point).is_integer():
                 continue
-            team, p_over = hit
+            team, p_over, mean = hit
             p = p_over.get(float(r.point))
             if p is None:
                 continue
             o.at[i, "p_model"] = p if str(r["name"]).lower() == "over" else 1 - p
+            o.at[i, "proj"] = mean
             o.at[i, "team"] = team
             gmatch += 1
     stats["saves props"], stats["saves props matched"] = len(sv), gmatch
@@ -136,6 +150,13 @@ def compare(odds: pd.DataFrame, games: pd.DataFrame, proj: pd.DataFrame, alpha: 
     o["edge"] = o.p_model - o.market_p
     o["ev"] = o.p_model * o.dec - 1
     return o, stats
+
+
+def _same_first(a: str, b: str) -> bool:
+    """First names that are the same person spelled two ways: same initial (Max / Maxwell,
+    Zack / Zachary) or a close transliteration (Yegor / Egor)."""
+    fa, fb = key(str(a).split()[0]), key(str(b).split()[0])
+    return fa[:1] == fb[:1] or difflib.SequenceMatcher(None, fa, fb).ratio() >= 0.75
 
 
 def _label(r) -> str:

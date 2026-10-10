@@ -56,12 +56,12 @@ github_token = "<fine-grained token with Gists: read and write>"
 Without them the app still works, but saved overrides last only until the container restarts
 (the Lines page says so). Locally, overrides stay in `data/overrides/lineups.json`.
 
-**Sportsbook odds** (the Edges tab) come from The Odds API (the-odds-api.com; the 20K plan covers
-game lines plus props at three refreshes a day). Add the key as a repo secret: Settings -> Secrets
-and variables -> Actions -> `ODDS_API_KEY`. The refresh then runs `odds.py` after `live.py`, and the
-app downloads `odds.parquet` from the release. Optional: `odds_api_key = "..."` in the Streamlit
-app's secrets turns on a "Refresh odds" button (at most every 15 minutes). Locally, put the same
-line in `.streamlit/secrets.toml`. Without a key, nothing is fetched and the tab says so.
+**Sportsbook odds** (the Edges tab) come from The Odds API (the-odds-api.com) and are fetched only
+when someone clicks **Refresh odds** on that tab (about 3 credits plus 6 per game; at most every 2
+minutes). Nothing fetches them automatically. The button needs the key in the Streamlit app's
+Settings -> Secrets as `odds_api_key = "..."`; locally, the same line goes in
+`.streamlit/secrets.toml` (gitignored). Fetched odds live in `data/odds/odds.parquet` until the
+next click (on Streamlit Cloud, until the container restarts).
 
 ## Files
 

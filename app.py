@@ -979,6 +979,8 @@ def page_model():
 
 # ---------------------------------------------------------------- Edges
 
+EDGE_TYPES = {"Moneyline": "Moneyline", "Puck line": "Puck line", "Total": "Total", "PTS": "Points", "SOG": "Shots",
+              "G": "Goals", "A": "Assists", "PPP": "PP points", "Saves": "Saves"}
 ODDS_COOLDOWN_MIN = 2   # the Refresh odds button: stops double clicks and public-app spam
 
 
@@ -1034,52 +1036,63 @@ def page_edges():
         return
     deps = deployments(day)
     df, stats = edges.compare(o, s["games"], p, s["coefs"]["alpha"], goalie_lines(day, deps))
-    head.caption(f"Odds fetched **{when(o.fetched_at.iloc[0])}** from {o.book.nunique()} books · projections built "
-                 f"{s['built_at']} · {len(df):,} priced bets")
+    head.caption("Sportsbook prices compared with the model's own probability for the same bet. "
+                 "Odds update only when you click Refresh odds.")
     if df.empty:
         st.info("No pregame odds match this date's games yet.")
         return
-    c1, c2, c3, c4, c5, c6 = st.columns([2, 2, 1, 1, 1, 1])
-    kinds = ["Moneyline", "Puck line", "Total", "PTS", "SOG", "G", "A", "PPP", "Saves"]
-    kind = c1.multiselect("Bet type", [k for k in kinds if k in set(df.kind)])
-    books = c2.multiselect("Books", sorted(df.book.unique()))
-    best = c3.toggle("Best price", value=True, help="One row per bet: the book with the best price")
-    both = c6.toggle("Both sides posted", value=True, key="edge_both",
-                     help="Only bets a book posts both sides of, so there is a market price to compare with. "
-                          "Off shows one-sided longshots too, where the model's tail is least reliable.")
-    min_ev = c4.number_input("Min EV %", value=0.0, step=1.0)
-    sort = c5.selectbox("Sort by", ["EV %", "Edge"], key="edge_sort", help="EV % favours long prices; Edge ranks by the "
-                        "probability gap in percentage points")
-    q = df[df.kind.isin(kind)] if kind else df
+    df = df.assign(type=df.kind.map(EDGE_TYPES))
+    shown = df[df.novig.notna()].sort_values("dec", ascending=False).drop_duplicates(["game_id", "market", "bet"])
+    t_up = pd.Timestamp(o.fetched_at.iloc[0]).tz_convert("America/New_York")
+    a, b, c, d = st.columns(4)
+    a.metric("Odds updated", t_up.strftime("%I:%M %p ET").lstrip("0"), border=True, help=t_up.strftime("%a %b %d, %Y"))
+    b.metric("Sportsbooks", f"{o.book.nunique()}", border=True)
+    c.metric("Bets priced", f"{len(shown):,}", border=True, help="Distinct bets with both sides posted")
+    d.metric("Positive EV", f"{(shown.ev > 0).sum():,}", border=True,
+             help="Bets where the model's probability beats the best available price")
+
+    c1, c2, c3, c4, c5, c6 = st.columns([2, 2, 1, 1, 1, 1], vertical_alignment="bottom")
+    kind = c1.multiselect("Bet type", [k for k in EDGE_TYPES.values() if k in set(df.type)], key="edge_type")
+    books = c2.multiselect("Sportsbooks", sorted(df.book.unique()), key="edge_books")
+    min_ev = c3.number_input("Min EV %", value=0.0, step=1.0, format="%.0f", key="edge_min")
+    sort = c4.selectbox("Sort by", ["EV", "Edge"], key="edge_sort",
+                        help="EV ranks by expected profit (it favours long odds); Edge by the probability gap")
+    best = c5.toggle("Best price", value=True, key="edge_best", help="One row per bet, at the book with the best odds")
+    both = c6.toggle("Both sides", value=True, key="edge_both",
+                     help="Only bets the book posts both sides of, so its probability can be read without its margin. "
+                          "Off adds one-sided longshots, where the model is least reliable.")
+    q = df[df.type.isin(kind)] if kind else df
     q = q[q.book.isin(books)] if books else q
-    q = q[q.market_p.notna()] if both else q
+    q = q[q.novig.notna()] if both else q
     if best:
         q = q.sort_values("dec", ascending=False).drop_duplicates(["game_id", "market", "bet"])
-    q = q[q.ev * 100 >= min_ev].sort_values("ev" if sort == "EV %" else "edge", ascending=False)
-    t = pd.DataFrame({"Game": q.game, "Type": q.kind, "Bet": q.bet, "Proj": q.proj, "Book": q.book,
-                      "Price": [f"{x:+.0f}" for x in q.price], "Model %": q.p_model * 100,
-                      "Book no-vig %": q.novig * 100, "Market %": q.market_p * 100, "Edge": q.edge * 100,
-                      "EV %": q.ev * 100, "Books": q.books})
-    pct = lambda h: st.column_config.NumberColumn(format="%.1f%%", width="small", help=h)
+    q = q[q.ev * 100 >= min_ev].sort_values("ev" if sort == "EV" else "edge", ascending=False)
+    t = pd.DataFrame({"Game": q.game, "Bet": q.subject, "Line": q.line, "Projection": q.proj_text,
+                      "Book": q.book, "Book odds": [f"{x:+.0f}" for x in q.price], "Our odds": q.p_model.map(american),
+                      "Book %": (q.novig * 100).round(), "Our %": (q.p_model * 100).round(),
+                      "Edge": q.edge * 100, "EV": q.ev * 100})
+    bar = lambda h: st.column_config.ProgressColumn(format="%d%%", min_value=0, max_value=100, width="small", help=h)
     st.dataframe(t, hide_index=True, width="stretch", height=720, column_config={
-        "Game": st.column_config.TextColumn(pinned=True),
-        "Bet": st.column_config.TextColumn("Bet", pinned=True),
-        "Type": st.column_config.TextColumn(width="small"), "Book": st.column_config.TextColumn(width="small"),
-        "Proj": st.column_config.NumberColumn(format="%.2f", width="small",
-                                              help="The model's projected number: SOG, points, saves, total goals..."),
-        "Price": st.column_config.TextColumn(width="small", help="The book's price for this bet"),
-        "Model %": pct("The model's probability (goalie saves: as if he starts)"),
-        "Book no-vig %": pct("This book's probability with its margin removed (needs both sides posted)"),
-        "Market %": pct("Average no-vig probability across the books posting this bet"),
+        "Game": st.column_config.TextColumn(width="small", pinned=True),
+        "Bet": st.column_config.TextColumn(width="medium", pinned=True, help="The player, the team, or the game total"),
+        "Line": st.column_config.TextColumn(help="The bet as the book lists it"),
+        "Projection": st.column_config.TextColumn(
+            help="The model's number for this bet: the player's projected stat, the projected total, or the "
+                 "projected score (this team first)"),
+        "Book": st.column_config.TextColumn(width="small"),
+        "Book odds": st.column_config.TextColumn(width="small", help="The book's price"),
+        "Our odds": st.column_config.TextColumn(width="small", help="The model's fair price (no margin)"),
+        "Book %": bar("The book's probability with its margin removed"),
+        "Our %": bar("The model's probability (saves: as if he starts)"),
         "Edge": st.column_config.NumberColumn(format="%+.1f", width="small",
-                                              help="Model % minus Market %, in percentage points"),
-        "EV %": st.column_config.NumberColumn(format="%+.1f%%", width="small",
-                                              help="Expected profit per $100 staked at this price, by the model"),
-        "Books": st.column_config.NumberColumn(width="small", help="How many books post this bet")})
-    st.caption(f"Matched {stats.get('skater props matched', 0)} of {stats.get('skater props', 0)} skater prop prices and "
-               f"{stats.get('saves props matched', 0)} of {stats.get('saves props', 0)} saves prices to projected players. "
-               "An edge is where the model and the market disagree. Books often know about late scratches and "
-               "line changes before the model does, so check those before trusting a big edge.")
+                                              help="Our % minus Book %, in percentage points"),
+        "EV": st.column_config.NumberColumn(format="%+.1f%%", width="small",
+                                            help="Expected profit per $100 bet at the book's odds, by the model")})
+    st.caption("**Book %** the book's probability without its margin · **Our %** the model's · **Edge** Our % − Book % · "
+               "**EV** expected profit per $100 at the book's odds. Saves are priced as if the goalie starts. Books often "
+               "know about late scratches and line changes first, so check the lineup before trusting a big edge. "
+               f"Matched {stats.get('skater props matched', 0) + stats.get('saves props matched', 0):,} of "
+               f"{stats.get('skater props', 0) + stats.get('saves props', 0):,} player prices to tonight's projections.")
     st.download_button("Download CSV", t.to_csv(index=False), f"edges_{day}.csv", "text/csv")
 
 

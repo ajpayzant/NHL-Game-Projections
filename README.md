@@ -56,7 +56,7 @@ github_token = "<fine-grained token with Gists: read and write>"
 Without them the app still works, but saved overrides last only until the container restarts
 (the Lines page says so). Locally, overrides stay in `data/overrides/lineups.json`.
 
-**Sportsbook odds** (the Edges tab) come from The Odds API (the-odds-api.com) and are fetched only
+**Sportsbook odds** (the Edges tab: DraftKings, FanDuel, BetMGM, Caesars, Fanatics; set in `odds.BOOKS`) come from The Odds API (the-odds-api.com) and are fetched only
 when someone clicks **Refresh odds** on that tab (about 3 credits plus 6 per game; at most every 2
 minutes). Nothing fetches them automatically. The button needs the key in the Streamlit app's
 Settings -> Secrets as `odds_api_key = "..."`; locally, the same line goes in

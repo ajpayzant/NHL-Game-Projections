@@ -989,6 +989,14 @@ def _odds(mtime: float) -> pd.DataFrame | None:
     return odds.load()
 
 
+@st.cache_data(show_spinner="Comparing prices with the projections...", max_entries=8)
+def _edges(odds_mtime: float, day: str, built_at: str, deps_key: str) -> tuple[pd.DataFrame, dict]:
+    """The full comparison, cached until the odds, the projections or a lineup change, so
+    filtering and sorting the table is instant."""
+    s, deps = state(), deployments(day)
+    return edges.compare(_odds(odds_mtime), s["games"], projections(day), s["coefs"]["alpha"], goalie_lines(day, deps))
+
+
 def goalie_lines(day: str, deps: dict) -> pd.DataFrame:
     """Every plausible starter's P(over) at each saves line, for pricing saves props."""
     S = saves_state()
@@ -1035,7 +1043,7 @@ def page_edges():
         st.info("Nothing to project for this date.")
         return
     deps = deployments(day)
-    df, stats = edges.compare(o, s["games"], p, s["coefs"]["alpha"], goalie_lines(day, deps))
+    df, stats = _edges(odds.ODDS_FILE.stat().st_mtime, day, s["built_at"], json.dumps(deps, sort_keys=True, default=str))
     head.caption("Sportsbook prices compared with the model's own probability for the same bet. "
                  "Odds update only when you click Refresh odds.")
     if df.empty:

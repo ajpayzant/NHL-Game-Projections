@@ -27,7 +27,10 @@ import config as C
 API = "https://api.the-odds-api.com/v4/sports/icehockey_nhl"
 ODDS_DIR = C.DATA / "odds"
 ODDS_FILE = ODDS_DIR / "odds.parquet"
-REGIONS = "us"
+# The books the Edges tab compares (The Odds API keys -> titles). Naming books instead of a region
+# costs the same (up to 10 books = 1 region) and keeps the fetch and the comparison small.
+BOOKS = {"draftkings": "DraftKings", "fanduel": "FanDuel", "betmgm": "BetMGM", "williamhill_us": "Caesars",
+         "fanatics": "Fanatics"}
 GAME_MARKETS = ["h2h", "spreads", "totals"]
 PROP_MARKETS = ["player_points", "player_shots_on_goal", "player_goals", "player_assists",
                 "player_power_play_points", "player_total_saves"]
@@ -82,14 +85,14 @@ def fetch(key: str | None = None, verbose: bool = True) -> pd.DataFrame | None:
     now = datetime.now(timezone.utc)
     fetched_at = now.isoformat(timespec="seconds")
     rows = []
-    games, usage = _get("/odds", key, regions=REGIONS, markets=",".join(GAME_MARKETS), oddsFormat="american")
+    games, usage = _get("/odds", key, bookmakers=",".join(BOOKS), markets=",".join(GAME_MARKETS), oddsFormat="american")
     for ev in games:
         rows += _rows(ev, fetched_at)
     soon = [ev for ev in games
             if datetime.fromisoformat(ev["commence_time"].replace("Z", "+00:00")) < now + timedelta(hours=PROPS_HOURS)]
     for ev in soon:
         try:
-            one, usage = _get(f"/events/{ev['id']}/odds", key, regions=REGIONS,
+            one, usage = _get(f"/events/{ev['id']}/odds", key, bookmakers=",".join(BOOKS),
                               markets=",".join(PROP_MARKETS), oddsFormat="american")
             rows += _rows(one, fetched_at)
         except requests.HTTPError as e:  # a game with no props yet: keep the rest
@@ -105,7 +108,11 @@ def fetch(key: str | None = None, verbose: bool = True) -> pd.DataFrame | None:
 
 
 def load() -> pd.DataFrame | None:
-    return pd.read_parquet(ODDS_FILE) if ODDS_FILE.exists() else None
+    """The saved odds, kept to BOOKS (a file fetched before the list was narrowed has more)."""
+    if not ODDS_FILE.exists():
+        return None
+    o = pd.read_parquet(ODDS_FILE)
+    return o[o.book.isin(BOOKS.values())].reset_index(drop=True)
 
 
 if __name__ == "__main__":

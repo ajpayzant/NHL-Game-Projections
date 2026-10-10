@@ -4,7 +4,7 @@ from pathlib import Path
 from streamlit.testing.v1 import AppTest
 
 APP = str(Path(__file__).resolve().parents[1] / "app.py")
-for page in ("slate", "game", "lines", "player", "model"):
+for page in ("slate", "game", "lines", "player", "edges", "model"):
     os.environ["APP_PAGE"] = page
     at = AppTest.from_file(APP, default_timeout=300)
     at.run()

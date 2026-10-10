@@ -14,9 +14,11 @@ import streamlit as st
 
 import cloud
 import config as C
+import edges
 import live
 import markets
 import model
+import odds
 import store
 from saves import live as saves_live
 
@@ -975,7 +977,100 @@ def page_model():
         st.json(state()["coefs"] if state() else {})
 
 
+# ---------------------------------------------------------------- Edges
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _odds(mtime: float) -> pd.DataFrame | None:
+    return odds.load()
+
+
+def goalie_lines(day: str, deps: dict) -> pd.DataFrame:
+    """Every plausible starter's P(over) at each saves line, for pricing saves props."""
+    S = saves_state()
+    if S is None:
+        return pd.DataFrame()
+    nm = names()
+    rows = []
+    for g in state()["games"][state()["games"].date == day].itertuples():
+        for team in (g.away, g.home):
+            d = deps.get(team, {})
+            k = json.dumps([d.get("goalie"), d.get("goalie_status", ""), d.get("source", "")])
+            for p in _team_goalies(S["built_at"], int(g.game_id), team, k):
+                rows.append({"game_id": int(g.game_id), "team": team, "goalie": nm.get(p["goalie"], p["name"]),
+                             "p_over": {float(c[7:]): v for c, v in p.items() if c.startswith("p_over_")}})
+    return pd.DataFrame(rows)
+
+
+def page_edges():
+    s = state() or no_state()
+    day = pick_day(s)
+    st.title(f"Edges · {day}")
+    o = _odds(odds.ODDS_FILE.stat().st_mtime) if odds.ODDS_FILE.exists() else None
+    key_ok = odds.api_key() is not None
+    if key_ok:
+        last = pd.Timestamp(o.fetched_at.iloc[0]) if o is not None and len(o) else None
+        wait = last is not None and pd.Timestamp.now(tz="UTC") - last < pd.Timedelta(minutes=15)
+        if st.sidebar.button("Refresh odds", disabled=wait,
+                             help="Fetch the latest prices now (uses API credits; at most every 15 minutes)."):
+            with st.spinner("Fetching sportsbook odds..."):
+                odds.fetch(verbose=False)
+            _odds.clear()
+            st.rerun()
+    if o is None or o.empty:
+        st.info("No sportsbook odds yet. They are fetched by the refresh (`python odds.py`) once an API key "
+                "from the-odds-api.com is set: `ODDS_API_KEY` in the GitHub repo's Actions secrets, or "
+                "`odds_api_key` in `.streamlit/secrets.toml` locally.")
+        return
+    p = projections(day)
+    if p.empty:
+        st.info("Nothing to project for this date.")
+        return
+    deps = deployments(day)
+    df, stats = edges.compare(o, s["games"], p, s["coefs"]["alpha"], goalie_lines(day, deps))
+    st.caption(f"Odds fetched {when(o.fetched_at.iloc[0])} from {o.book.nunique()} books · projections built "
+               f"{s['built_at']} · {len(df):,} priced bets")
+    if df.empty:
+        st.info("No pregame odds match this date's games yet.")
+        return
+    c1, c2, c3, c4, c5 = st.columns([2, 2, 1, 1, 1])
+    kinds = ["Moneyline", "Puck line", "Total", "PTS", "SOG", "G", "A", "PPP", "Saves"]
+    kind = c1.multiselect("Bet type", [k for k in kinds if k in set(df.kind)])
+    books = c2.multiselect("Books", sorted(df.book.unique()))
+    best = c3.toggle("Best price", value=True, help="One row per bet: the book with the best price")
+    min_ev = c4.number_input("Min EV %", value=0.0, step=1.0)
+    sort = c5.selectbox("Sort by", ["EV %", "Edge"], key="edge_sort", help="EV % favours long prices; Edge ranks by the "
+                        "probability gap in percentage points")
+    q = df[df.kind.isin(kind)] if kind else df
+    q = q[q.book.isin(books)] if books else q
+    if best:
+        q = q.sort_values("dec", ascending=False).drop_duplicates(["game_id", "market", "bet"])
+    q = q[q.ev * 100 >= min_ev].sort_values("ev" if sort == "EV %" else "edge", ascending=False)
+    t = pd.DataFrame({"Game": q.game, "Type": q.kind, "Bet": q.bet, "Book": q.book,
+                      "Price": [f"{x:+.0f}" for x in q.price], "Model %": q.p_model * 100,
+                      "Book no-vig %": q.novig * 100, "Market %": q.market_p * 100, "Edge": q.edge * 100,
+                      "EV %": q.ev * 100, "Books": q.books})
+    pct = lambda h: st.column_config.NumberColumn(format="%.1f%%", width="small", help=h)
+    st.dataframe(t, hide_index=True, width="stretch", height=720, column_config={
+        "Game": st.column_config.TextColumn(pinned=True),
+        "Bet": st.column_config.TextColumn("Bet", pinned=True),
+        "Type": st.column_config.TextColumn(width="small"), "Book": st.column_config.TextColumn(width="small"),
+        "Price": st.column_config.TextColumn(width="small", help="The book's price for this bet"),
+        "Model %": pct("The model's probability (goalie saves: as if he starts)"),
+        "Book no-vig %": pct("This book's probability with its margin removed (needs both sides posted)"),
+        "Market %": pct("Average no-vig probability across the books posting this bet"),
+        "Edge": st.column_config.NumberColumn(format="%+.1f", width="small",
+                                              help="Model % minus Market %, in percentage points"),
+        "EV %": st.column_config.NumberColumn(format="%+.1f%%", width="small",
+                                              help="Expected profit per $100 staked at this price, by the model"),
+        "Books": st.column_config.NumberColumn(width="small", help="How many books post this bet")})
+    st.caption(f"Matched {stats.get('skater props matched', 0)} of {stats.get('skater props', 0)} skater prop prices and "
+               f"{stats.get('saves props matched', 0)} of {stats.get('saves props', 0)} saves prices to projected players. "
+               "An edge is where the model and the market disagree. Books often know about late scratches and "
+               "line changes before the model does, so check those before trusting a big edge.")
+    st.download_button("Download CSV", t.to_csv(index=False), f"edges_{day}.csv", "text/csv")
+
+
 _start = os.environ.get("APP_PAGE", "slate")  # headless tests pick the page to open
 PAGES = [("slate", page_slate, "Slate"), ("game", page_game, "Game"), ("lines", page_lines, "Lines & goalies"),
-         ("player", page_player, "Player"), ("model", page_model, "How it works")]
+         ("player", page_player, "Player"), ("edges", page_edges, "Edges"), ("model", page_model, "How it works")]
 st.navigation([st.Page(f, title=t, url_path=k, default=_start == k) for k, f, t in PAGES]).run()

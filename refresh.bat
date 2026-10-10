@@ -4,3 +4,4 @@ cd /d "%~dp0"
 set PYTHONUTF8=1
 echo ==== %date% %time% >> "data\refresh.log"
 ".venv\Scripts\python.exe" live.py >> "data\refresh.log" 2>&1
+".venv\Scripts\python.exe" odds.py >> "data\refresh.log" 2>&1

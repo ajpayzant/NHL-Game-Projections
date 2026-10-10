@@ -56,6 +56,13 @@ github_token = "<fine-grained token with Gists: read and write>"
 Without them the app still works, but saved overrides last only until the container restarts
 (the Lines page says so). Locally, overrides stay in `data/overrides/lineups.json`.
 
+**Sportsbook odds** (the Edges tab) come from The Odds API (the-odds-api.com; the 20K plan covers
+game lines plus props at three refreshes a day). Add the key as a repo secret: Settings -> Secrets
+and variables -> Actions -> `ODDS_API_KEY`. The refresh then runs `odds.py` after `live.py`, and the
+app downloads `odds.parquet` from the release. Optional: `odds_api_key = "..."` in the Streamlit
+app's secrets turns on a "Refresh odds" button (at most every 15 minutes). Locally, put the same
+line in `.streamlit/secrets.toml`. Without a key, nothing is fetched and the tab says so.
+
 ## Files
 
 | File | Role |
@@ -68,8 +75,9 @@ Without them the app still works, but saved overrides last only until the contai
 | `markets.py` | team moneyline / puck line / total from the projected score |
 | `backtest.py` | walk-forward evaluation vs baselines |
 | `live.py` | schedule, rosters, Daily Faceoff lines + starters, overrides, projection |
+| `odds.py`, `edges.py` | sportsbook prices from The Odds API; each price compared with the model's probability (Edges tab) |
 | `saves/` | the goalie saves model (shots faced, save %, pull risk, starter model), merged from NHL_Goalie_Saves; its own tables in `data/saves`, rebuilt at the end of `live.py` |
-| `app.py` | Slate · Game · Lines & goalies · Player · How it works |
+| `app.py` | Slate · Game · Lines & goalies · Player · Edges · How it works |
 | `cloud.py`, `store.py`, `publish.py` | Streamlit Cloud: download the latest data release; overrides in a gist; pack / unpack data for the workflow |
 | `research/` | the experiments behind every modelling choice (bake-off, ablation, bias checks, tuning) |
 

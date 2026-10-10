@@ -69,6 +69,7 @@ def compare(odds: pd.DataFrame, games: pd.DataFrame, proj: pd.DataFrame, alpha: 
     o["p_model"] = np.nan
     o["proj"] = np.nan   # the model's projected number for the stat (total goals, SOG, saves...)
     o["proj_own"] = o["proj_opp"] = np.nan   # game lines: projected goals, this team / opponent
+    o["team"] = None                         # player props: his team
     gm = games.set_index("game_id")
     lam = proj.groupby(["game_id", "team"]).g_hat.sum()
 

@@ -1059,22 +1059,35 @@ def page_edges():
     d.metric("Positive EV", f"{(shown.ev > 0).sum():,}", border=True,
              help="Bets where the model's probability beats the best available price")
 
-    c1, c2, c3, c4, c5, c6 = st.columns([2, 2, 1, 1, 1, 1], vertical_alignment="bottom")
-    kind = c1.multiselect("Bet type", [k for k in EDGE_TYPES.values() if k in set(df.type)], key="edge_type")
-    books = c2.multiselect("Sportsbooks", sorted(df.book.unique()), key="edge_books")
-    min_ev = c3.number_input("Min EV %", value=0.0, step=1.0, format="%.0f", key="edge_min")
-    sort = c4.selectbox("Sort by", ["EV", "Edge"], key="edge_sort",
+    c1, c2, c3, c4 = st.columns(4)
+    game_order = df.sort_values("commence_time").game.drop_duplicates().tolist()
+    games_sel = c1.multiselect("Game", game_order, key="edge_games")
+    pool = df[df.game.isin(games_sel)] if games_sel else df
+    plab = pool[pool.team.notna()].drop_duplicates("subject")    # players with a prop (skaters and goalies)
+    plab = dict(zip(plab.subject, plab.subject + " (" + plab.team.astype(str) + ")"))
+    players = c2.multiselect("Player", sorted(plab), format_func=plab.get, key="edge_players",
+                             placeholder="Search a player",
+                             help="Every line posted for him, whatever its EV")
+    kind = c3.multiselect("Bet type", [k for k in EDGE_TYPES.values() if k in set(df.type)], key="edge_type")
+    books = c4.multiselect("Sportsbooks", sorted(df.book.unique()), key="edge_books")
+    c5, c6, c7, c8, _ = st.columns([1, 1, 1, 1, 2], vertical_alignment="bottom")
+    min_ev = c5.number_input("Min EV %", value=0.0, step=1.0, format="%.0f", key="edge_min",
+                             disabled=bool(players), help="Ignored while a player is picked")
+    sort = c6.selectbox("Sort by", ["EV", "Edge"], key="edge_sort",
                         help="EV ranks by expected profit (it favours long odds); Edge by the probability gap")
-    best = c5.toggle("Best price", value=True, key="edge_best", help="One row per bet, at the book with the best odds")
-    both = c6.toggle("Both sides", value=True, key="edge_both",
+    best = c7.toggle("Best price", value=True, key="edge_best", help="One row per bet, at the book with the best odds")
+    both = c8.toggle("Both sides", value=True, key="edge_both",
                      help="Only bets the book posts both sides of, so its probability can be read without its margin. "
                           "Off adds one-sided longshots, where the model is least reliable.")
-    q = df[df.type.isin(kind)] if kind else df
+    q = df[df.game.isin(games_sel)] if games_sel else df
+    q = q[q.subject.isin(players)] if players else q
+    q = q[q.type.isin(kind)] if kind else q
     q = q[q.book.isin(books)] if books else q
     q = q[q.novig.notna()] if both else q
     if best:
         q = q.sort_values("dec", ascending=False).drop_duplicates(["game_id", "market", "bet"])
-    q = q[q.ev * 100 >= min_ev].sort_values("ev" if sort == "EV" else "edge", ascending=False)
+    q = q if players else q[q.ev * 100 >= min_ev]
+    q = q.sort_values("ev" if sort == "EV" else "edge", ascending=False)
     t = pd.DataFrame({"Game": q.game, "Bet": q.subject, "Line": q.line, "Projection": q.proj_text,
                       "Book": q.book, "Book odds": [f"{x:+.0f}" for x in q.price], "Our odds": q.p_model.map(american),
                       "Book %": (q.novig * 100).round(), "Our %": (q.p_model * 100).round(),

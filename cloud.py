@@ -33,8 +33,9 @@ ASSETS = {"state.pkl": C.DATA / "live" / "state.pkl",
           "backtest_app.parquet": C.DATA / "backtest" / "backtest_last.parquet",
           "saves.pkl": C.DATA / "saves" / "models" / "live.pkl",
           "results_live.parquet": C.DATA / "tracking" / "results_live.parquet",
-          "results_backtest.parquet": C.DATA / "tracking" / "results_backtest.parquet"}
-OPTIONAL = {"saves.pkl", "results_live.parquet", "results_backtest.parquet"}  # the goalie page is blank without it; the skater pages must not wait on it
+          "results_backtest.parquet": C.DATA / "tracking" / "results_backtest.parquet",
+          "goalie_games.parquet": C.DATA / "saves" / "goalie_games_app.parquet"}
+OPTIONAL = {"saves.pkl", "results_live.parquet", "results_backtest.parquet", "goalie_games.parquet"}  # the goalie page is blank without it; the skater pages must not wait on it
 LOCAL_MANIFEST = C.DATA / "live" / "manifest.json"
 
 

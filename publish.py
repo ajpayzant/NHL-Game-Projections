@@ -50,6 +50,11 @@ def pack() -> None:
     shutil.copy(BACKTEST_APP, DIST / "backtest_app.parquet")
     if SAVES_STATE.exists():  # a failed goalie build leaves the last published saves.pkl in place
         shutil.copy(SAVES_STATE, DIST / "saves.pkl")
+    gg = C.DATA / "saves" / "lake" / "goalies.parquet"
+    if gg.exists():   # goalie game log for the Player page (the app does not get the saves lake)
+        cols = ["game_id", "season", "game_type", "date", "team", "opp", "is_home", "goalie", "name", "starter", "toi",
+                "shots_against", "saves", "goals_against", "decision"]
+        pd.read_parquet(gg, columns=cols).to_parquet(DIST / "goalie_games.parquet", index=False)
     if (TRACKING / "results_live.parquet").exists():
         shutil.copy(TRACKING / "results_live.parquet", DIST / "results_live.parquet")
     import pickle

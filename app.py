@@ -15,6 +15,7 @@ import streamlit as st
 import cloud
 import config as C
 import edges
+import linecheck
 import live
 import markets
 import model
@@ -750,6 +751,41 @@ MARKETS = [("SOG", "sog", 2), ("SOG", "sog", 3), ("SOG", "sog", 4), ("SOG", "sog
 PROB = {"sog": "p_sog_{}", "points": "p_pts_{}", "goals": "p_g_{}", "assists": "p_a_{}", "ppp": "p_ppp_{}"}
 
 
+GOALIE_GAMES = C.DATA / "saves" / "goalie_games_app.parquet"   # the cloud copy (published by the refresh)
+
+
+@st.cache_data
+def _goalie_games(path: str, mtime: float) -> pd.DataFrame:
+    g = pd.read_parquet(path)
+    g["date"] = pd.to_datetime(g.date)
+    g = g[g.toi > 0]
+    return g.assign(sv_pct=g.saves / g.shots_against.where(g.shots_against > 0))
+
+
+def goalie_games() -> pd.DataFrame:
+    """Every goalie appearance since 2021-22 (the saves model's lake locally, a slim copy on the cloud)."""
+    for p in (C.DATA / "saves" / "lake" / "goalies.parquet", GOALIE_GAMES):
+        if p.exists():
+            return _goalie_games(str(p), p.stat().st_mtime)
+    return pd.DataFrame()
+
+
+def day_goalies(day: str, deps: dict) -> list[dict]:
+    """Every plausible starter on the date with his saves projection and his game."""
+    S = saves_state()
+    if S is None:
+        return []
+    out = []
+    for g in state()["games"][state()["games"].date == day].itertuples():
+        for team, opp, home in ((g.away, g.home, False), (g.home, g.away, True)):
+            d = deps.get(team, {})
+            k = json.dumps([d.get("goalie"), d.get("goalie_status", ""), d.get("source", "")])
+            for i, q in enumerate(_team_goalies(S["built_at"], int(g.game_id), team, k)):
+                out.append({**q, "team": team, "opp": opp, "is_home": home, "game_id": int(g.game_id),
+                            "role": "Starter" if i == 0 else "Backup"})
+    return out
+
+
 def page_player():
     s = state() or no_state()
     day = pick_day(s)
@@ -757,9 +793,23 @@ def page_player():
     if p.empty:
         st.stop()
     p = p.sort_values(["team", "pts_hat"], ascending=[True, False])
-    lab = {i: f"{r.name} · {r.team}" for i, r in zip(p.index, p.itertuples())}
-    keys = list(lab)
-    i = st.sidebar.selectbox("Player", keys, index=keys.index(p.pts_hat.idxmax()), format_func=lab.get, key=f"pp_{day}")
+    deps = deployments(day)
+    gl = day_goalies(day, deps)
+    nm = names()
+    # skaters and goalies in one list, grouped by team (goalies after their team's skaters)
+    opts, lab = [], {}
+    for team in sorted(set(p.team) | {g["team"] for g in gl}):
+        for i, r in zip(p.index[p.team == team], p[p.team == team].itertuples()):
+            opts.append(f"s{i}"); lab[f"s{i}"] = f"{r.name} · {r.team}"
+        for j, g in enumerate(gl):
+            if g["team"] == team:
+                opts.append(f"g{j}"); lab[f"g{j}"] = f"{nm.get(g['goalie'], g['name'])} · {team} · G"
+    sel = st.sidebar.selectbox("Player", opts, index=opts.index(f"s{p.pts_hat.idxmax()}"), format_func=lab.get,
+                               key=f"pp_{day}", help="Skaters and goalies; type to search")
+    if sel[0] == "g":
+        page_goalie(day, gl[int(sel[1:])], deps)
+        return
+    i = int(sel[1:])
     r = p.loc[i]
     ph = hist()
     ph = ph[(ph.player == r.player) & (ph.date < pd.Timestamp(day))].sort_values("date")
@@ -920,6 +970,139 @@ def page_player():
         breakdown(r, p, i, s)
 
 
+def page_goalie(day: str, g: dict, deps: dict):
+    """The Player page for a goalie: tonight's saves projection, saves prop lines with hit
+    rates, his game log and seasons. Props are priced as if he starts, as books grade them."""
+    nm = names()
+    gid = int(g["goalie"])
+    gh = goalie_games()
+    mine = gh[(gh.goalie == gid) & (gh.date < pd.Timestamp(day))].sort_values("date") if len(gh) else gh
+    starts = mine[mine.starter] if len(mine) else mine
+    inf = info(g["team"])
+    me = inf[inf.player == gid]
+    me = me.iloc[0] if len(me) else None
+    name = nm.get(gid, g["name"])
+
+    # ---- header
+    c0, c1, c2 = st.columns([1, 4, 4])
+    if me is not None and isinstance(me.get("headshot"), str):
+        c0.image(me["headshot"], width=110)
+    age = None
+    if me is not None and isinstance(me.get("birth"), str):
+        age = (pd.Timestamp(day) - pd.Timestamp(me["birth"])).days / 365.25
+    bits = [f"#{int(me['number'])}" if me is not None and pd.notna(me.get("number")) else None, g["team"], "G",
+            f"age {age:.0f}" if age else None,
+            f"catches {me['shoots']}" if me is not None and isinstance(me.get("shoots"), str) else None]
+    c1.title(name)
+    c1.markdown(" · ".join(b for b in bits if b))
+    status = g.get("status") or ""
+    c2.markdown(f"**Tonight** {'vs' if g['is_home'] else '@'} {g['opp']} · {day}  \n"
+                f"**Start chance** {g['p_start']:.0%} ({g['role'].lower()}{', ' + status if status else ''})  \n"
+                f"**Team shots against** {g['mu_team_sa']:.1f} expected  \n"
+                f"**Lines & goalies** pins the starter: an override there sets this to 100%")
+
+    # ---- projection vs averages
+    st.markdown("#### Tonight's projection")
+    st.caption("If he starts. Books void a goalie's props when he doesn't start, so they're priced the same way.")
+    cols = st.columns(6)
+    for c, (t, v) in zip(cols, [("Start %", f"{g['p_start']:.0%}"), ("Saves", f"{g['mean']:.1f}"),
+                                ("Shots faced", f"{g['shots_faced']:.1f}"), ("Goals against", f"{g['goals_against']:.2f}"),
+                                ("Save %", f"{g['exp_sv_pct']:.3f}"), ("Pulled %", f"{g['pull_rate']:.1%}")]):
+        c.metric(t, v, border=True)
+    cur = starts[starts.season == C.CURRENT_SEASON] if len(starts) else starts
+    last = starts[(starts.season == C.CURRENT_SEASON - 1) & (starts.game_type == 2)] if len(starts) else starts
+    car = starts[starts.game_type == 2] if len(starts) else starts
+    wins = (("Last 10 starts", starts.tail(10)), ("This season", cur), ("Last season", last), ("Career", car))
+
+    def avg(w, c):
+        if not len(w):
+            return np.nan
+        return w.saves.sum() / w.shots_against.sum() if c == "sv_pct" else w[c].mean()
+    comp = pd.DataFrame({"Tonight": [g["mean"], g["shots_faced"], g["goals_against"], g["exp_sv_pct"]],
+                         **{f"{wl} ({len(w)} gp)": [avg(w, c) for c in ("saves", "shots_against", "goals_against", "sv_pct")]
+                            for wl, w in wins}},
+                        index=["Saves", "Shots against", "Goals against", "Save %"])
+    st.dataframe(comp.style.format("{:.2f}", na_rep="—").format("{:.3f}", subset=pd.IndexSlice["Save %", :], na_rep="—"),
+                 width="stretch")
+
+    # ---- saves lines + hit rates
+    st.markdown("#### Saves lines and hit rates")
+    pmf = np.asarray(g["pmf"])
+    x = np.arange(len(pmf))
+    mid = int(round(g["median"]))
+    windows = [("Last 5", starts.tail(5)), ("Last 10", starts.tail(10)), ("Last 20", starts.tail(20)), ("This season", cur),
+               ("Last season", last), (f"vs {g['opp']}", starts[starts.opp == g["opp"]] if len(starts) else starts)]
+    rows = []
+    for ln in [k + 0.5 for k in range(mid - 6, mid + 6)]:
+        pr = float(pmf[x > ln].sum())
+        row = {"Line": f"Saves o{ln:g}", "Model": pr, "Over": american(pr), "Under": american(1 - pr)}
+        for wl, w in windows:
+            row[wl] = (w.saves > ln).mean() if len(w) else np.nan
+        rows.append(row)
+    hr = pd.DataFrame(rows)
+    pc = [c for c in hr.columns if c not in ("Line", "Over", "Under")]
+    hr[pc] = (hr[pc] * 100).round()
+    cfg = {c: st.column_config.ProgressColumn(c, format="%d%%", min_value=0, max_value=100) for c in pc}
+    cfg |= {"Over": st.column_config.TextColumn("Fair over", width="small"),
+            "Under": st.column_config.TextColumn("Fair under", width="small")}
+    st.dataframe(hr, hide_index=True, width="stretch", column_config=cfg, height=35 * (len(hr) + 1) + 3)
+    k = min(range(len(rows)), key=lambda j: abs(rows[j]["Model"] - 0.5))
+    st.caption(f"Fair line, the one closest to a coin flip: **{rows[k]['Line'][7:]} saves** (over {rows[k]['Over']} / "
+               f"under {rows[k]['Under']}). Hit rates count his starts only. Games in each window: "
+               + " · ".join(f"{wl} {len(w)}" for wl, w in windows) + ".")
+
+    # ---- game log
+    st.markdown("#### Game log")
+    if not len(starts):
+        st.info("No NHL starts in the data (2021-22 on).")
+        return
+    c1, c2, c3 = st.columns([3, 2, 1.3])
+    stat = c1.segmented_control("Stat", ["Saves", "Shots against", "Goals against", "Save %"], default="Saves",
+                                key="gl_stat") or "Saves"
+    n = c2.segmented_control("Starts", [10, 20, 40, 82], default=20, key="gl_n") or 20
+    col = {"Saves": "saves", "Shots against": "shots_against", "Goals against": "goals_against", "Save %": "sv_pct"}[stat]
+    proj_v = {"saves": g["mean"], "shots_against": g["shots_faced"], "goals_against": g["goals_against"],
+              "sv_pct": g["exp_sv_pct"]}[col]
+    default = {"saves": rows[k]["Line"][7:], "shots_against": round(proj_v) + 0.5, "goals_against": 2.5, "sv_pct": 0.9}[col]
+    line = c3.number_input("Line", value=float(default), step=0.01 if col == "sv_pct" else 0.5, key=f"gl_line_{col}")
+    log = starts.tail(n).copy()
+    log["value"] = log[col]
+    log["game"] = log.date.dt.strftime("%m-%d") + np.where(log.is_home, " v ", " @ ") + log.opp.astype(str)
+    log["result"] = np.where(log.value > line, f"over {line:g}", f"under {line:g}")
+    bars = alt.Chart(log).mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
+        x=alt.X("game:N", sort=None, title=None, axis=alt.Axis(labelAngle=-45)),
+        y=alt.Y("value:Q", title=stat, scale=alt.Scale(zero=col != "sv_pct")),
+        color=alt.Color("result:N", scale=alt.Scale(domain=[f"over {line:g}", f"under {line:g}"], range=[PROJ, "#c3c2b7"]),
+                        legend=alt.Legend(title=None, orient="top")),
+        tooltip=[alt.Tooltip("game:N", title="Game"), alt.Tooltip("value:Q", title=stat, format=".3f" if col == "sv_pct" else ".0f"),
+                 alt.Tooltip("shots_against:Q", title="Shots"), alt.Tooltip("decision:N", title="Decision")])
+    rule = alt.Chart(pd.DataFrame({"y": [line]})).mark_rule(color=MUTED, strokeDash=[4, 3]).encode(y="y:Q")
+    proj_rule = alt.Chart(pd.DataFrame({"y": [proj_v], "t": [f"{proj_v:.2f}"]})).mark_rule(color=ACT, strokeWidth=2).encode(
+        y="y:Q", tooltip=alt.Tooltip("t:N", title="Tonight's projection"))
+    st.altair_chart((bars + rule + proj_rule).properties(height=280), width="stretch")
+    st.caption(f"Over {line:g} in {(log.value > line).mean():.0%} of his last {len(log)} starts. "
+               f"Orange line: tonight's projection ({proj_v:.2f}). Dashed: the line.")
+
+    t1, t2 = st.tabs(["Recent starts", "Season by season"])
+    with t1:
+        rec = mine.tail(15).iloc[::-1]
+        st.dataframe(pd.DataFrame({
+            "Date": rec.date.dt.strftime("%Y-%m-%d"), "Opp": np.where(rec.is_home, "vs ", "@ ") + rec.opp.astype(str),
+            "Started": np.where(rec.starter, "yes", "relief"), "TOI": rec.toi / 60, "Shots": rec.shots_against,
+            "Saves": rec.saves, "GA": rec.goals_against, "Save %": rec.sv_pct, "Decision": rec.decision}),
+            hide_index=True, width="stretch", column_config={"TOI": st.column_config.NumberColumn(format="%.1f"),
+                                                             "Save %": st.column_config.NumberColumn(format="%.3f")})
+    with t2:
+        reg = mine[mine.game_type == 2].groupby("season")
+        ss = pd.DataFrame({"GP": reg.size(), "Starts": reg.starter.sum(), "Shots/gm": reg.shots_against.mean(),
+                           "Saves/gm": reg.saves.mean(), "GA/gm": reg.goals_against.mean(),
+                           "Save %": reg.saves.sum() / reg.shots_against.sum().replace(0, np.nan)})
+        ss.index = [f"{y}-{str(y + 1)[2:]}" for y in ss.index]
+        st.dataframe(ss.iloc[::-1], width="stretch", column_config={
+            "Shots/gm": st.column_config.NumberColumn(format="%.1f"), "Saves/gm": st.column_config.NumberColumn(format="%.1f"),
+            "GA/gm": st.column_config.NumberColumn(format="%.2f"), "Save %": st.column_config.NumberColumn(format="%.3f")})
+
+
 def breakdown(r, p, i, s):
     mult = model.multipliers(p.loc[[i]], p.loc[[i]], s["coefs"])
     left, right = st.columns(2)
@@ -1015,6 +1198,122 @@ def goalie_lines(day: str, deps: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+CHECK_MARKETS = {"Points": ("PTS", "pts_hat", "pts"), "Shots": ("SOG", "sog_hat", "sog"), "Goals": ("G", "g_hat", "g"),
+                 "Assists": ("A", "a_hat", "a"), "PP points": ("PPP", "ppp_hat", "ppp"), "Saves": ("Saves", None, None),
+                 "Moneyline": ("Moneyline", None, None), "Puck line": ("Puck line", None, None), "Total": ("Total", None, None)}
+PLAY_EDGE = 0.08   # the backtest: below about 8 points the books' margin eats the edge
+
+
+def _odds_in(label: str, default: str, key: str, help: str | None = None) -> float | None:
+    raw = st.text_input(label, value=default, key=key, help=help).strip().replace("+", "")
+    try:
+        v = float(raw)
+    except ValueError:
+        return None
+    return v if abs(v) >= 100 else None
+
+
+def check_line(day: str, s: dict, expanded: bool = False):
+    """Price one line typed in from a book against tonight's projection."""
+    with st.expander("Check a line from a book", expanded=expanded):
+        p = projections(day)
+        games = s["games"][s["games"].date == day]
+        if p.empty or games.empty:
+            st.info("No projections for this date.")
+            return
+        c1, c2, c3 = st.columns([2, 2, 3])
+        market = c1.selectbox("Market", list(CHECK_MARKETS), key="chk_market")
+        glab = {r.game_id: f"{r.away} @ {r.home}" for r in games.itertuples()}
+        gid = c2.selectbox("Game", list(glab), format_func=glab.get, key="chk_game")
+        g = games[games.game_id == gid].iloc[0]
+        kind, col, akey = CHECK_MARKETS[market]
+        d1, d2, d3, d4 = st.columns(4)
+        lam = p[p.game_id == gid].groupby("team").g_hat.sum()
+        proj_text, win_push = "", None
+        if market in ("Moneyline", "Puck line", "Total"):
+            if market == "Total":
+                side = d1.segmented_control("Side", ["Over", "Under"], default="Over", key="chk_ou") or "Over"
+                line = d2.number_input("Line", value=6.5, step=0.5, key="chk_tot")
+                win_push = linecheck.game(lam[g.home], lam[g.away], "Total", True, line, side == "Over")
+                proj_text = f"{lam[g.home] + lam[g.away]:.2f} total goals projected"
+                bet = f"{side} {line:g} goals, {glab[gid]}"
+            else:
+                team = c3.segmented_control("Team", [g.away, g.home], default=g.away, key="chk_team") or g.away
+                line = 0.0 if market == "Moneyline" else d2.number_input(
+                    "Handicap", value=-1.5, step=1.0, key="chk_pl", help="This team's puck line, e.g. -1.5 or +1.5")
+                win_push = linecheck.game(lam[g.home], lam[g.away], market, team == g.home, line)
+                opp = g.home if team == g.away else g.away
+                proj_text = f"projected score {team} {lam[team]:.2f} – {lam[opp]:.2f} {opp}"
+                bet = f"{team} {'moneyline' if market == 'Moneyline' else f'{line:+g}'}"
+                side = None
+        elif market == "Saves":
+            gl = [x for x in day_goalies(day, deployments(day)) if x["game_id"] == gid]
+            if not gl:
+                st.info("No goalie projections for this game.")
+                return
+            nm = names()
+            j = c3.selectbox("Goalie", range(len(gl)), format_func=lambda j: f"{nm.get(gl[j]['goalie'], gl[j]['name'])} "
+                             f"· {gl[j]['team']} ({gl[j]['p_start']:.0%} to start)", key="chk_goalie")
+            q = gl[j]
+            side = d1.segmented_control("Side", ["Over", "Under"], default="Over", key="chk_sv_ou") or "Over"
+            line = d2.number_input("Line", value=float(round(q["median"])) + 0.5, step=1.0, key="chk_sv")
+            win_push = linecheck.from_pmf(np.asarray(q["pmf"]), line, side == "Over")
+            proj_text = f"{q['mean']:.1f} saves projected if he starts ({q['shots_faced']:.1f} shots)"
+            bet = f"{nm.get(q['goalie'], q['name'])} {side.lower()} {line:g} saves"
+        else:
+            pg = p[p.game_id == gid].sort_values(col, ascending=False)
+            who = c3.selectbox("Player", pg.index, format_func=lambda i: f"{pg.at[i, 'name']} · {pg.at[i, 'team']}",
+                               key="chk_player")
+            r = pg.loc[who]
+            side = d1.segmented_control("Side", ["Over", "Under"], default="Over", key="chk_p_ou") or "Over"
+            default = {"Points": 0.5, "Shots": 2.5, "Goals": 0.5, "Assists": 0.5, "PP points": 0.5}[market]
+            line = d2.number_input("Line", value=default, step=0.5, key=f"chk_line_{market}")
+            win_push = linecheck.skater(float(r[col]), s["coefs"]["alpha"][akey], line, side == "Over")
+            proj_text = f"{r[col]:.2f} {market.lower()} projected ({r.toi_hat:.1f} min)"
+            bet = f"{r['name']} {side.lower()} {line:g} {market.lower()}"
+        with d3:
+            price = _odds_in("Book odds", "-110", "chk_odds", "American odds, e.g. -115 or +130")
+        with d4:
+            other = _odds_in("Other side's odds (optional)", "", "chk_other",
+                             "Adding the other side's price removes the book's margin from its probability")
+        if price is None:
+            st.warning("Enter the book's odds as an American price, e.g. -115 or +130.")
+            return
+        ev = linecheck.evaluate(*win_push, price, other)
+        if kind == "Moneyline":
+            side = "Favourite" if ev["book_p"] >= 0.5 else "Underdog"
+        elif kind == "Puck line":
+            side = "Favourite -" if line < 0 else "Underdog +"
+        a, b, c, d, e = st.columns(5)
+        a.metric("Our probability", f"{ev['p']:.1%}", border=True,
+                 help="Given no push" if ev["push"] > 0 else None)
+        b.metric("Our fair odds", american(ev["p"]), border=True, help="The price with no margin, by the model")
+        c.metric("Book probability", f"{ev['book_p']:.1%}", border=True,
+                 help="Margin removed" if ev["novig"] else "Includes the book's margin; add the other side to remove it")
+        d.metric("Edge", f"{100 * ev['edge']:+.1f} pts", border=True, help="Our probability minus the book's")
+        e.metric("EV per $100", f"{ev['ev']:+.2f}", border=True, help="Expected profit at the book's odds, by the model")
+        # how this market and side did in the 2024-26 backtest at an 8+ point edge (closing lines)
+        bt = results("Backtest 2024-26")
+        hist_txt, roi8 = "", None
+        if len(bt):
+            h8 = bt[(bt.snap == "close") & (bt.kind == kind) & (bt.side == side) & (bt.bucket.map(BUCKET_LO) >= PLAY_EDGE)]
+            if h8.bets.sum() >= 20:
+                roi8 = h8.pnl.sum() / h8.bets.sum()
+                hist_txt = (f"Backtest, {EDGE_TYPES[kind].lower()} {side.lower()} bets with an 8+ point edge: "
+                            f"{roi8:+.1%} ROI on {int(h8.bets.sum()):,} bets.")
+        msg = f"**{bet}** at {price:+.0f}: {proj_text}."
+        if ev["ev"] <= 0 or ev["edge"] < 0.02:
+            st.error(f"No edge. {msg} The book's price is at or above the model's fair value.")
+        elif ev["edge"] < PLAY_EDGE:
+            st.warning(f"Small edge. {msg} Historically, edges under about 8 points have not beaten the books' margin.")
+        elif roi8 is not None and roi8 < 0:
+            st.warning(f"Edge, but this market has not paid historically. {msg} {hist_txt}")
+        else:
+            st.success(f"Edge worth a look. {msg} Check the lineup and goalie news before playing.")
+        if hist_txt:
+            st.caption(hist_txt + (f" Push chance {ev['push']:.0%}, refunded." if ev["push"] > 0 else ""))
+
+
 def page_edges():
     s = state() or no_state()
     day = pick_day(s)
@@ -1035,6 +1334,7 @@ def page_edges():
                     st.stop()
             _odds.clear()
             st.rerun()
+    check_line(day, s, expanded=o is None or o.empty)
     if o is None or o.empty:
         head.info("No sportsbook odds yet. Click **Refresh odds** to fetch them (needs `odds_api_key` in the "
                   "app's secrets, or in `.streamlit/secrets.toml` locally).")

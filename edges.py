@@ -70,6 +70,7 @@ def compare(odds: pd.DataFrame, games: pd.DataFrame, proj: pd.DataFrame, alpha: 
     o["proj"] = np.nan   # the model's projected number for the stat (total goals, SOG, saves...)
     o["proj_own"] = o["proj_opp"] = np.nan   # game lines: projected goals, this team / opponent
     o["team"] = None                         # player props: his team
+    o["pid"] = np.nan                        # player props: the matched player's NHL id
     gm = games.set_index("game_id")
     lam = proj.groupby(["game_id", "team"]).g_hat.sum()
 
@@ -123,6 +124,7 @@ def compare(odds: pd.DataFrame, games: pd.DataFrame, proj: pd.DataFrame, alpha: 
         o.at[i, "p_model"] = p_over if str(r["name"]).lower() == "over" else 1 - p_over
         o.at[i, "proj"] = getattr(row, col)
         o.at[i, "team"] = row.team
+        o.at[i, "pid"] = getattr(row, "player", np.nan)
         matched += 1
     stats["skater props"], stats["skater props matched"] = len(sk), matched
 
@@ -130,19 +132,21 @@ def compare(odds: pd.DataFrame, games: pd.DataFrame, proj: pd.DataFrame, alpha: 
     sv = o[o.market == "player_total_saves"]
     gmatch = 0
     if goalies is not None and len(goalies):
-        gl = {(gid, key(n)): (t, d, m) for gid, n, t, d, m in
-              zip(goalies.game_id, goalies.goalie, goalies.team, goalies.p_over, goalies["mean"])}
+        ids = goalies["goalie_id"] if "goalie_id" in goalies else pd.Series(np.nan, index=goalies.index)
+        gl = {(gid, key(n)): (t, d, m, g) for gid, n, t, d, m, g in
+              zip(goalies.game_id, goalies.goalie, goalies.team, goalies.p_over, goalies["mean"], ids)}
         for i, r in sv.iterrows():
             hit = gl.get((r.game_id, key(r.player)))
             if hit is None or r.point is None or not np.isfinite(r.point) or float(r.point).is_integer():
                 continue
-            team, p_over, mean = hit
+            team, p_over, mean, goalie_id = hit
             p = p_over.get(float(r.point))
             if p is None:
                 continue
             o.at[i, "p_model"] = p if str(r["name"]).lower() == "over" else 1 - p
             o.at[i, "proj"] = mean
             o.at[i, "team"] = team
+            o.at[i, "pid"] = goalie_id
             gmatch += 1
     stats["saves props"], stats["saves props matched"] = len(sv), gmatch
 

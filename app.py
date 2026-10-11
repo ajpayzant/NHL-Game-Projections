@@ -20,6 +20,7 @@ import markets
 import model
 import odds
 import store
+import tracking
 from saves import live as saves_live
 
 st.set_page_config(page_title="NHL Skater Projections", layout="wide")
@@ -1117,7 +1118,104 @@ def page_edges():
     st.download_button("Download CSV", t.to_csv(index=False), f"edges_{day}.csv", "text/csv")
 
 
+# ---------------------------------------------------------------- Results
+
+RESULT_FILES = {"Live (this season)": tracking.RESULTS_LIVE, "Backtest 2024-26": tracking.RESULTS_BACKTEST}
+EDGE_MIN = {"All bets": None, "Edge 0%+": 0.0, "Edge 2%+": 0.02, "Edge 5%+": 0.05, "Edge 8%+": 0.08, "Edge 12%+": 0.12}
+BUCKET_LO = {lab: lo for lo, _, lab in tracking.BUCKETS}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _results(path: str, mtime: float) -> pd.DataFrame:
+    return pd.read_parquet(path)
+
+
+def results(name: str) -> pd.DataFrame:
+    p = RESULT_FILES[name]
+    if not p.exists():   # locally, the published copy (the cloud app syncs it like the projections)
+        try:
+            cloud._download(p.name, p)
+        except Exception:
+            return pd.DataFrame()
+    return _results(str(p), p.stat().st_mtime)
+
+
+def page_results():
+    st.title("Results")
+    st.caption("The model's projections graded against the sportsbooks' opening (10 AM ET) and closing lines: "
+               "1-unit bets at the best price of DraftKings, FanDuel, BetMGM, Caesars and Fanatics.")
+    c1, c2, c3, c4 = st.columns([2, 1, 2, 1], vertical_alignment="bottom")
+    first = "Live (this season)" if not results("Live (this season)").empty else "Backtest 2024-26"
+    src = c1.segmented_control("Results", list(RESULT_FILES), default=first, key="res_src") or first
+    snap = c2.segmented_control("Price", ["Close", "Open"], default="Close", key="res_snap") or "Close"
+    r = results(src)
+    if r.empty:
+        st.info("No graded games yet. Each morning's refresh grades the previous day's games against their "
+                "opening and closing lines (it needs the `ODDS_API_KEY` secret in the GitHub repo).")
+        return
+    r = r[r.snap == snap.lower()]
+    kinds = [k for k in EDGE_TYPES if k in set(r.kind)]
+    kind = c3.multiselect("Bet type", kinds, format_func=EDGE_TYPES.get, key="res_kind")
+    th = EDGE_MIN[c4.selectbox("Bets", list(EDGE_MIN), index=4, key="res_edge",
+                               help="Only bets where the model's probability beat the books' no-vig "
+                                    "probability by at least this much")]
+    q = r[r.kind.isin(kind)] if kind else r
+    sel = q if th is None else q[q.bucket.map(BUCKET_LO) >= th]
+    bets, wins, pnl = sel.bets.sum(), sel.wins.sum(), sel.pnl.sum()
+    acc = q[q.primary]
+    a, b, c, d = st.columns(4)
+    a.metric("Bets", f"{int(bets):,}", border=True, help=f"{q.date.min()} to {q.date.max()}" if len(q) else None)
+    b.metric("Win rate", f"{wins / bets:.1%}" if bets else "—", border=True)
+    c.metric("ROI", f"{pnl / bets:+.1%}" if bets else "—", border=True, help="Profit per unit staked")
+    d.metric("Profit", f"{pnl:+,.1f} u" if bets else "—", border=True, help="Units won at 1 unit per bet")
+
+    def table(by: list[str]) -> pd.DataFrame:
+        g = sel.groupby(by, observed=True)[["bets", "wins", "pnl"]].sum().reset_index()
+        g = g[g.bets > 0]
+        g["Win %"] = 100 * g.wins / g.bets
+        g["ROI"] = 100 * g.pnl / g.bets
+        return g
+
+    roi = st.column_config.NumberColumn(format="%+.1f%%", width="small")
+    left, right = st.columns([3, 2], gap="large")
+    with left:
+        st.markdown("**By market and side**")
+        t = table(["kind", "side"])
+        t = t.assign(kind=t.kind.map(EDGE_TYPES)).rename(columns={"kind": "Market", "side": "Side", "bets": "Bets",
+                                                                  "pnl": "Profit (u)"})
+        t["order"] = t.Market.map({v: i for i, v in enumerate(EDGE_TYPES.values())})
+        st.dataframe(t.sort_values(["order", "Side"])[["Market", "Side", "Bets", "Win %", "ROI", "Profit (u)"]],
+                     hide_index=True, width="stretch", height=35 * (len(t) + 1) + 3, column_config={
+                         "Win %": st.column_config.NumberColumn(format="%.1f%%", width="small"), "ROI": roi,
+                         "Profit (u)": st.column_config.NumberColumn(format="%+.1f", width="small")})
+    with right:
+        st.markdown("**By edge**")
+        e = q.groupby("bucket", observed=True)[["bets", "wins", "pnl"]].sum().reset_index()
+        e["lo"] = e.bucket.map(BUCKET_LO)
+        e = e.sort_values("lo")
+        e = pd.DataFrame({"Model edge": e.bucket, "Bets": e.bets, "Win %": 100 * e.wins / e.bets, "ROI": 100 * e.pnl / e.bets})
+        st.dataframe(e, hide_index=True, width="stretch", column_config={
+            "Win %": st.column_config.NumberColumn(format="%.1f%%", width="small"), "ROI": roi})
+        if acc.bets.sum():
+            st.caption(f"Accuracy (log loss, lower is better): model **{acc.ll_model.sum() / acc.bets.sum():.4f}** · "
+                       f"books' no-vig **{acc.ll_mkt.sum() / acc.bets.sum():.4f}**, on {int(acc.bets.sum()):,} bets "
+                       "(all edges, one side per bet)")
+    daily = sel.groupby("date").pnl.sum().sort_index().cumsum().reset_index()
+    if len(daily) > 1:
+        daily["date"] = pd.to_datetime(daily.date)
+        ch = alt.Chart(daily).mark_line(color=PROJ, strokeWidth=2).encode(
+            x=alt.X("date:T", title=None), y=alt.Y("pnl:Q", title="Cumulative profit (units)"),
+            tooltip=[alt.Tooltip("date:T"), alt.Tooltip("pnl:Q", format="+.1f", title="Profit")])
+        zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color=MUTED, strokeDash=[4, 4]).encode(y="y:Q")
+        st.markdown("**Running profit**")
+        st.altair_chart((zero + ch).properties(height=260), width="stretch")
+    st.caption("Edge = the model's probability minus the books' consensus no-vig probability. Saves are graded only "
+               "when the goalie started (books void the prop otherwise); pushes and void bets are left out. "
+               "Backtest = 2024-26 game lines and a 2025-26 prop sample, priced with last game's lineups.")
+
+
 _start = os.environ.get("APP_PAGE", "slate")  # headless tests pick the page to open
 PAGES = [("slate", page_slate, "Slate"), ("game", page_game, "Game"), ("lines", page_lines, "Lines & goalies"),
-         ("player", page_player, "Player"), ("edges", page_edges, "Edges"), ("model", page_model, "How it works")]
+         ("player", page_player, "Player"), ("edges", page_edges, "Edges"), ("results", page_results, "Results"),
+         ("model", page_model, "How it works")]
 st.navigation([st.Page(f, title=t, url_path=k, default=_start == k) for k, f, t in PAGES]).run()

@@ -23,12 +23,13 @@ DIST = C.ROOT / "dist"
 BACKTEST_APP = C.DATA / "backtest" / "backtest_app.parquet"
 SAVES_LAKE = C.DATA / "saves" / "lake"
 SAVES_STATE = C.DATA / "saves" / "models" / "live.pkl"
+TRACKING = C.DATA / "tracking"            # projection snapshots + graded results (Results tab)
 APP_BACKTEST_COLS = ["game_type", "gp_16", "points", "goals", "assists", "sog", "ppp",
                      "p_pts_1", "p_g_1", "p_a_1", "p_sog_2", "p_sog_3", "p_sog_4", "p_ppp_1"]
 
 
 def bundle_paths() -> list:
-    return [C.LAKE, C.RAW / str(C.CURRENT_SEASON), C.MODELS, C.DFO_DIR, BACKTEST_APP, SAVES_LAKE]
+    return [C.LAKE, C.RAW / str(C.CURRENT_SEASON), C.MODELS, C.DFO_DIR, BACKTEST_APP, SAVES_LAKE, TRACKING]
 
 
 def slim_backtest() -> None:
@@ -49,6 +50,8 @@ def pack() -> None:
     shutil.copy(BACKTEST_APP, DIST / "backtest_app.parquet")
     if SAVES_STATE.exists():  # a failed goalie build leaves the last published saves.pkl in place
         shutil.copy(SAVES_STATE, DIST / "saves.pkl")
+    if (TRACKING / "results_live.parquet").exists():
+        shutil.copy(TRACKING / "results_live.parquet", DIST / "results_live.parquet")
     import pickle
     with open(C.DATA / "live" / "state.pkl", "rb") as fh:
         built = pickle.load(fh)["built_at"]

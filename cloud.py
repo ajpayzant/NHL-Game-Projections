@@ -93,4 +93,13 @@ def sync() -> str | None:
                 pass
         LOCAL_MANIFEST.parent.mkdir(parents=True, exist_ok=True)
         LOCAL_MANIFEST.write_text(json.dumps(remote))
+    else:
+        # an optional file published after this container last synced (or a failed download)
+        # would otherwise wait for the next build; fetch whatever is still missing
+        for name in OPTIONAL:
+            if not ASSETS[name].exists():
+                try:
+                    _download(name, ASSETS[name])
+                except Exception:
+                    pass
     return remote.get("built_at")

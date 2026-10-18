@@ -1053,6 +1053,9 @@ def page_goalie(day: str, g: dict, deps: dict):
 
     # ---- game log
     st.markdown("#### Game log")
+    if not len(gh):
+        st.warning("The goalie game log hasn't loaded yet; it arrives with the next data sync (within 10 minutes).")
+        return
     if not len(starts):
         st.info("No NHL starts in the data (2021-22 on).")
         return

@@ -246,7 +246,7 @@ expectations and probabilities right; no pregame model can call single games.
 - **Game**: both teams' projected goals, assists, shots, points, PP and PK minutes; a fair game-lines
   board (moneyline, puck line, total); then each team's players in line order.
 - **Slate**: also has a "Game lines" panel with every game's fair moneyline, puck line and total.
-- **Lines & goalies**: the depth chart (LW-C-RW, LD-RD, starter/backup) and PP / PK units, editable;
+- **Lines & goalies**: the depth chart (LW-C-RW, LD-RD plus a 7th-D row for 11 + 7 lineups, starter/backup) and PP / PK units, editable;
   or a table with a dressed box and a TOI override. Saving updates every projection at once.
 - **Player**: tonight's projection vs his last 10 / season / career; a prop-line table (SOG o1.5-o4.5,
   points o0.5-o2.5, goals o0.5, assists o0.5-o1.5, PP points o0.5-o1.5) with the model's %, fair over / under odds and

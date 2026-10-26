@@ -328,7 +328,8 @@ POS_SPOT = {"L": "LW", "C": "C", "R": "RW"}
 def assign_spots(dep: dict, info: pd.DataFrame) -> dict[tuple[str, int, str], int]:
     """Depth chart {(F|D, line, spot): player}. Daily Faceoff's own spots are kept; anyone
     without one goes to his natural spot (position, or the side he shoots for defence) if
-    free, else the first free spot on his line. `info` has player, pos, shoots."""
+    free, else the first free spot on his line, then on the other lines (forward lines 1-4,
+    defence pairs 1-4, where pair 4 holds a 7th defenceman). `info` has player, pos, shoots."""
     pos = dict(zip(info.player, info.pos))
     shoots = dict(zip(info.player, info.get("shoots", pd.Series(dtype=str))))
     chart: dict[tuple[str, int, str], int] = {}
@@ -346,7 +347,7 @@ def assign_spots(dep: dict, info: pd.DataFrame) -> dict[tuple[str, int, str], in
         spots = F_SPOTS if grp == "F" else D_SPOTS
         nat = POS_SPOT.get(pos.get(p)) if grp == "F" else ("LD" if shoots.get(p) == "L" else "RD")
         order = ([nat] if nat in spots else []) + [s for s in spots if s != nat]
-        lines = [line] + [l for l in range(1, 5 if grp == "F" else 4) if l != line]
+        lines = [line] + [l for l in range(1, 5) if l != line]  # D pair 4 is a 7th defenceman
         for l in lines:
             free = [s for s in order if (grp, l, s) not in chart]
             if free:

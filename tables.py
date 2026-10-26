@@ -98,14 +98,19 @@ def deployment(pg: pd.DataFrame) -> pd.DataFrame:
     """Line / pair / unit numbers for each player-game, from that night's ice time.
 
     Forwards: trios built from mutual 5v5 linemates, ranked 1-4 by the trio's mean EV ice
-    time (a 13th forward joins the trio he spent most time with). Defence: pairs ranked 1-3
-    the same way. PP1 / PP2 are the five most and next five most PP minutes (0 = no PP time);
+    time (a 13th forward joins the trio he spent most time with; with 11 the 4th line is a
+    pair). Defence: pairs ranked 1-3 the same way, and a 7th defenceman (the one with the
+    least EV time) is pair 4 on his own, as Daily Faceoff lists him. PP1 / PP2 are the five most and next five most PP minutes (0 = no PP time);
     PK1 / PK2 the same with four."""
     out = []
     for (gid, team), g in pg.groupby(["game_id", "team"], observed=True, sort=False):
         line = {}
         for is_d, size, mate_cols in ((False, 3, ["lm_f1", "lm_f2"]), (True, 2, ["lm_d1"])):
             grp = g[(g.pos == "D") == is_d]
+            if is_d and len(grp) > 6:  # 11 F + 7 D: the extra D sits outside the three pairs
+                extra = grp.nsmallest(len(grp) - 6, "toi_ev")
+                line.update({p: 4 for p in extra.player})
+                grp = grp.drop(extra.index)
             ids = set(grp.player)
             toi = dict(zip(grp.player, grp.toi_ev))
             groups: list[list[int]] = []

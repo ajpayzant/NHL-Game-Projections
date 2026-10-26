@@ -613,7 +613,7 @@ def page_lines():
     problems: list[str] = []
     if view == "Depth chart":
         new_chart = {}
-        for grp, title, spots, n_lines, pool in (("F", "Forwards", live.F_SPOTS, 4, fwd), ("D", "Defence", live.D_SPOTS, 3, dmen)):
+        for grp, title, spots, n_lines, pool in (("F", "Forwards", live.F_SPOTS, 4, fwd), ("D", "Defence", live.D_SPOTS, 4, dmen)):
             st.markdown(f"##### {title}")
             widths = [0.5] + [3] * len(spots) + ([3] if grp == "D" else [])
             hdr = st.columns(widths)
@@ -621,7 +621,9 @@ def page_lines():
                 c.markdown(f"**{h}**")
             for line in range(1, n_lines + 1):
                 cols = st.columns(widths, vertical_alignment="center")
-                cols[0].markdown(f"**{line}**")
+                cols[0].markdown(f"**{line}**" if grp == "F" or line < 4 else "**7th**",
+                                 help=None if grp == "F" or line < 4 else "Pair 4 is for a 7th defenceman "
+                                 "(an 11 F + 7 D lineup); leave it empty for 12 + 6.")
                 for c, spot in zip(cols[1:], spots):
                     cur = chart.get((grp, line, spot))
                     opts = [None] + pool + ([cur] if cur is not None and cur not in pool else [])
@@ -697,7 +699,7 @@ def page_lines():
                    "goalie": starter, "backup": next((x for x in gopts if x != starter), None)}
     nf = sum(pos_of.get(x) != "D" for x in new_dep["skaters"])
     nd = len(new_dep["skaters"]) - nf
-    st.caption(f"{nf} forwards and {nd} defence dressed" + ("" if (nf, nd) == (12, 6) else " · a usual lineup is 12 + 6"))
+    st.caption(f"{nf} forwards and {nd} defence dressed" + ("" if (nf, nd) in ((12, 6), (11, 7)) else " · a usual lineup is 12 + 6 or 11 + 7"))
     for msg in problems:
         st.error(msg)
     c1, c2, _ = st.columns([1.2, 2.3, 5])
@@ -727,8 +729,9 @@ def depth_chart_html(d: dict, proj_t: pd.DataFrame, sk_info: pd.DataFrame, nm: p
                 f"<div class='s'>{r.pts_hat:.2f} pts · {r.sog_hat:.1f} SOG · {r.p_pts_1:.0%} 1+ pt</div></td>")
 
     rows_f = "".join(f"<tr><th>{l}</th>{''.join(cell(chart.get(('F', l, s))) for s in live.F_SPOTS)}</tr>" for l in range(1, 5))
-    rows_d = "".join(f"<tr><th>{l}</th>{''.join(cell(chart.get(('D', l, s))) for s in live.D_SPOTS)}<td class='b'></td></tr>"
-                     for l in range(1, 4))
+    rows_d = "".join(f"<tr><th>{l if l < 4 else '7th'}</th>{''.join(cell(chart.get(('D', l, s))) for s in live.D_SPOTS)}"
+                     "<td class='b'></td></tr>"
+                     for l in range(1, 5) if l < 4 or any(('D', 4, s) in chart for s in live.D_SPOTS))
     css = """<style>
     .dc{border-collapse:separate;border-spacing:6px;width:100%;font-family:"Source Sans Pro",sans-serif}
     .dc th{color:#52514e;font-weight:600;font-size:13px;text-align:left;padding:2px 6px;width:28px}

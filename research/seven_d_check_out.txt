@@ -1,0 +1,26 @@
+                                 n  TOI MAE  TOI bias  SOG dev  PTS dev
+lines set          version                                             
+last  all          before   141675   1.7927    0.0005   1.2219   0.9034
+      11F/7D games before     8117   2.0771    0.0021   1.2400   0.9034
+        their F    before     4960   1.9010    0.0803   1.2618   0.9642
+        their D1-6 before     2706   2.0522   -0.8102   1.2115   0.8552
+        7th D      before      451   4.1634    4.0157   1.1711   0.5241
+      all          after    141675   1.7925    0.0005   1.2220   0.9034
+      11F/7D games after      8117   2.0647    0.0021   1.2400   0.9034
+        their F    after      4960   1.9010    0.0803   1.2618   0.9642
+        their D1-6 after      2706   2.0412   -0.7765   1.2129   0.8551
+        7th D      after       451   4.0072    3.8133   1.1633   0.5234 
+
+                                   n  TOI MAE  TOI bias  SOG dev  PTS dev
+lines   set          version                                             
+tonight all          before   141675   1.5108    0.0008   1.2069   0.8976
+        11F/7D games before     8117   1.8652    0.0023   1.2261   0.8966
+          their F    before     4960   1.6340    0.1454   1.2433   0.9560
+          their D1-6 before     2706   1.9505   -0.8877   1.2054   0.8509
+          7th D      before      451   3.8951    3.7682   1.1616   0.5184
+        all          after    141675   1.5018    0.0008   1.2067   0.8975
+        11F/7D games after      8117   1.7127    0.0023   1.2215   0.8950
+          their F    after      4960   1.6340    0.1454   1.2433   0.9560
+          their D1-6 after      2706   1.7828   -0.3932   1.2049   0.8500
+          7th D      after       451   2.1579    0.8011   1.0820   0.4938 
+

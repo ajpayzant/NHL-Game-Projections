@@ -45,7 +45,7 @@ def _devig(o: pd.DataFrame) -> pd.Series:
 
 
 def match_games(odds: pd.DataFrame, games: pd.DataFrame) -> pd.DataFrame:
-    """Attach our game_id by team names (The Odds API uses full names, as the schedule does)."""
+    """Attach our game_id by team names (OpticOdds uses full names, as the schedule does)."""
     g = games.assign(k=[key(h) + "|" + key(a) for h, a in zip(games.home_name, games.away_name)])
     gid = dict(zip(g.k, g.game_id))
     return odds.assign(game_id=[gid.get(key(h) + "|" + key(a)) for h, a in zip(odds.home, odds.away)])

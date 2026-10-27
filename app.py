@@ -1330,7 +1330,7 @@ def page_edges():
         last = pd.Timestamp(o.fetched_at.iloc[0]) if o is not None and len(o) else None
         wait = last is not None and pd.Timestamp.now(tz="UTC") - last < pd.Timedelta(minutes=ODDS_COOLDOWN_MIN)
         if btn.button("Refresh odds", type="primary", disabled=wait, width="stretch",
-                      help=f"Fetch the latest sportsbook prices now (about 3 API credits plus 6 per game). "
+                      help=f"Fetch the latest sportsbook prices from OpticOdds now (about one API call per 5 games). "
                            f"At most once every {ODDS_COOLDOWN_MIN} minutes."):
             with st.spinner("Fetching sportsbook odds..."):
                 try:
@@ -1342,7 +1342,7 @@ def page_edges():
             st.rerun()
     check_line(day, s, expanded=o is None or o.empty)
     if o is None or o.empty:
-        head.info("No sportsbook odds yet. Click **Refresh odds** to fetch them (needs `odds_api_key` in the "
+        head.info("No sportsbook odds yet. Click **Refresh odds** to fetch them (needs `opticodds_api_key` in the "
                   "app's secrets, or in `.streamlit/secrets.toml` locally).")
         return
     p = projections(day)

@@ -8,6 +8,7 @@ import pandas as pd
 import live
 import markets
 import odds
+import tracking
 
 rng = np.random.default_rng(7)
 s = live.load_state()
@@ -53,7 +54,7 @@ for g in games.itertuples():
             mk.append({"key": m, "outcomes": outs})
         ev["bookmakers"].append({"key": k, "title": title, "markets": mk})
     events.append(ev)
-rows = [r for ev in events for r in odds._rows(ev, datetime.now(timezone.utc).isoformat(timespec="seconds"))]
+rows = [r for ev in events for r in tracking._rows(ev, datetime.now(timezone.utc).isoformat(timespec="seconds"))]
 odds.ODDS_DIR.mkdir(parents=True, exist_ok=True)
 pd.DataFrame(rows).to_parquet(odds.ODDS_FILE, index=False)
 print(f"{day}: {len(events)} games, {len(rows)} sample prices -> {odds.ODDS_FILE}")
@@ -85,6 +86,6 @@ for bk, out in add:
         m = {"key": "player_total_saves", "outcomes": []}
         bk["markets"].append(m)
     m["outcomes"].append(out)
-rows = [r for ev in events for r in odds._rows(ev, datetime.now(timezone.utc).isoformat(timespec="seconds"))]
+rows = [r for ev in events for r in tracking._rows(ev, datetime.now(timezone.utc).isoformat(timespec="seconds"))]
 pd.DataFrame(rows).to_parquet(odds.ODDS_FILE, index=False)
 print(f"with saves: {len(rows)} sample prices")

@@ -56,10 +56,10 @@ github_token = "<fine-grained token with Gists: read and write>"
 Without them the app still works, but saved overrides last only until the container restarts
 (the Lines page says so). Locally, overrides stay in `data/overrides/lineups.json`.
 
-**Sportsbook odds** (the Edges tab: DraftKings, FanDuel, BetMGM, Caesars, Fanatics; set in `odds.BOOKS`) come from The Odds API (the-odds-api.com) and are fetched only
-when someone clicks **Refresh odds** on that tab (about 3 credits plus 6 per game; at most every 2
-minutes). Nothing fetches them automatically. The button needs the key in the Streamlit app's
-Settings -> Secrets as `odds_api_key = "..."`; locally, the same line goes in
+**Sportsbook odds** (the Edges tab: DraftKings, FanDuel, BetMGM, Caesars, Fanatics; set in `odds.BOOKS`) come from OpticOdds (api.opticodds.com, the company key) and are fetched only
+when someone clicks **Refresh odds** on that tab (one call for the slate plus one per 5 games; main
+lines only; at most every 2 minutes). Nothing fetches them automatically. The button needs the key in the Streamlit app's
+Settings -> Secrets as `opticodds_api_key = "..."`; locally, the same line goes in
 `.streamlit/secrets.toml` (gitignored). Fetched odds live in `data/odds/odds.parquet` until the
 next click (on Streamlit Cloud, until the container restarts).
 
@@ -75,7 +75,7 @@ next click (on Streamlit Cloud, until the container restarts).
 | `markets.py` | team moneyline / puck line / total from the projected score |
 | `backtest.py` | walk-forward evaluation vs baselines |
 | `live.py` | schedule, rosters, Daily Faceoff lines + starters, overrides, projection |
-| `odds.py`, `edges.py` | sportsbook prices from The Odds API; each price compared with the model's probability (Edges tab) |
+| `odds.py`, `edges.py` | sportsbook prices from OpticOdds; each price compared with the model's probability (Edges tab) |
 | `saves/` | the goalie saves model (shots faced, save %, pull risk, starter model), merged from NHL_Goalie_Saves; its own tables in `data/saves`, rebuilt at the end of `live.py` |
 | `app.py` | Slate · Game · Lines & goalies · Player · Edges · How it works |
 | `cloud.py`, `store.py`, `publish.py` | Streamlit Cloud: download the latest data release; overrides in a gist; pack / unpack data for the workflow |

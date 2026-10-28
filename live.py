@@ -34,6 +34,7 @@ import model
 import parse
 import store
 import tables
+import trends
 from saves import live as saves_live
 
 LIVE = C.DATA / "live"
@@ -489,6 +490,11 @@ def build_state(fetch_new: bool = True, verbose: bool = True) -> dict:
         saves_live.build_state(games, verbose)
     except Exception as e:
         print(f"saves state not rebuilt: {e!r}")
+    if fetch_new:
+        try:  # official career totals for the Trends tab's milestones; nothing else waits on them
+            trends.refresh_careers(state, verbose)
+        except Exception as e:
+            print(f"careers not refreshed: {e!r}")
     return state
 
 

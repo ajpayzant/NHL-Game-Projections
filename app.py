@@ -1,4 +1,4 @@
-"""NHL skater game projections: Slate · Game · Lines & goalies · Player · How it works.
+"""NHL skater game projections: Slate · Game · Lines & goalies · Player · Trends · Edges · Results · How it works.
 
     run_app.bat            # http://localhost:8670
 """
@@ -22,6 +22,7 @@ import model
 import odds
 import store
 import tracking
+import trends
 from saves import live as saves_live
 
 st.set_page_config(page_title="NHL Skater Projections", layout="wide")
@@ -1520,8 +1521,345 @@ def page_results():
                "Backtest = 2024-26 game lines and a 2025-26 prop sample, priced with last game's lineups.")
 
 
+# ---------------------------------------------------------------- trends
+
+TEAM_GAMES = C.LAKE / "team_games.parquet"
+
+
+@st.cache_data
+def _team_games(path: str, mtime: float) -> pd.DataFrame:
+    t = pd.read_parquet(path)
+    return t.assign(date=pd.to_datetime(t.date), team=t.team.astype(str), opp=t.opp.astype(str),
+                    last_period_type=t.last_period_type.astype(str))
+
+
+def team_games() -> pd.DataFrame:
+    return _team_games(str(TEAM_GAMES), TEAM_GAMES.stat().st_mtime) if TEAM_GAMES.exists() else pd.DataFrame()
+
+
+def careers() -> pd.DataFrame | None:
+    return pd.read_parquet(trends.CAREERS) if trends.CAREERS.exists() else None
+
+
+@st.cache_data(show_spinner="Finding streaks, slumps and milestones...", max_entries=8)
+def _trends(day: str, built_at: str, deps_key: str, hist_mtime: float) -> dict:
+    s, deps, h, p = state(), deployments(day), hist(), projections(day)
+    starters = pd.DataFrame([{"goalie": g["goalie"], "team": g["team"]} for g in day_goalies(day, deps)
+                             if g["role"] == "Starter"], columns=["goalie", "team"])
+    gg = goalie_games()
+    return {"form": trends.form(h, p, day), "streaks": trends.streaks(h, p, day), "matchups": trends.matchups(h, p, day),
+            "milestones": trends.milestones(careers(), h, p, starters, day, s["coefs"]["alpha"]),
+            "goalies": trends.goalie_form(gg, starters.goalie, day) if len(gg) and len(starters) else pd.DataFrame(),
+            "starters": starters}
+
+
+def _tonight(opp, is_home) -> list[str]:
+    return [f"{'vs' if h else '@'} {o}" for o, h in zip(opp, is_home)]
+
+
+PCT = dict(format="%d%%", min_value=0, max_value=100, width="small")
+STREAK_P = {"Point streak": "p_pts_1", "Goal streak": "p_g_1", "Assist streak": "p_a_1", "Multi-point streak": "p_pts_2",
+            "3+ shots streak": "p_sog_3", "Goal drought": "p_g_1", "Point drought": "p_pts_1", "Shot slump (under 2)": "p_sog_2"}
+STREAK_BET = {"p_pts_1": "1+ point", "p_g_1": "a goal", "p_a_1": "1+ assist", "p_pts_2": "2+ points", "p_sog_3": "3+ shots",
+              "p_sog_2": "2+ shots"}
+REGULAR_PTS = 0.35   # usual points per game for a skater to count as a regular (Hot & cold)
+
+
+def page_trends():
+    s = state() or no_state()
+    day = pick_day(s)
+    st.title(f"Trends · {day}")
+    p = projections(day)
+    if p.empty:
+        st.info("Nothing to project for this date.")
+        return
+    deps = deployments(day)
+    T = _trends(day, s["built_at"], json.dumps(deps, sort_keys=True, default=str),
+                (C.LAKE / "player_games.parquet").stat().st_mtime)
+    nm = names()
+    games = s["games"][s["games"].date == day]
+    opp = {t: (o, h) for g in games.itertuples() for t, o, h in ((g.home, g.away, True), (g.away, g.home, False))}
+    glab = {f"{g.away} @ {g.home}": {g.away, g.home} for g in games.itertuples()}
+    st.caption("Streaks, slumps, matchups and milestones for tonight's players, from games before this date. "
+               "Context only: none of it changes a projection (recent form added nothing in testing once ice time "
+               "and longer-run rates are known), so each table shows what the model expects tonight next to it.")
+    c1, c2, _ = st.columns([2, 2, 3])
+    sel = c1.multiselect("Game", list(glab), key="tr_games", placeholder="All games")
+    teams = set().union(*(glab[g] for g in sel)) if sel else set(opp)
+    tsel = c2.multiselect("Team", sorted(teams), key="tr_teams", placeholder="All teams")
+    teams = set(tsel) if tsel else teams
+
+    def keep(df: pd.DataFrame) -> pd.DataFrame:
+        return df[df.team.isin(teams)] if len(df) else df
+
+    fm, sk, mu, ms = keep(T["form"]), keep(T["streaks"]), keep(T["matchups"]), T["milestones"]
+    if len(ms):
+        team_of = dict(zip(p.player, p.team)) | dict(zip(T["starters"].goalie, T["starters"].team))
+        ms = ms.assign(team=ms.player.map(team_of))
+        ms = ms[ms.team.isin(teams)]
+
+    # ---- storylines: who, in the label; the number, as the value
+    a, b, c, d = st.columns(4)
+    tile = dict(delta_color="off", delta_arrow="off", border=True)
+    hs = sk[(sk.kind == "Hot") & sk.streak.str.contains("Point streak")] if len(sk) else sk
+    if len(hs):
+        r = hs.sort_values(["games", "pts_hat"]).iloc[-1]
+        a.metric(f"Longest point streak · {r['name']}", f"{r.games} games", r.during.rsplit(",", 1)[0], **tile)
+    else:
+        a.metric("Longest point streak", "—", border=True)
+    reg = fm[fm.base_pts >= REGULAR_PTS] if len(fm) else fm
+    for col, title, asc in ((b, "Hottest regular", False), (c, "Coldest regular", True)):
+        if len(reg):
+            r = reg.sort_values("heat", ascending=asc).iloc[0]
+            col.metric(f"{title} · {r['name']}", f"{int(r.pts)} PTS in {int(r.gp)}",
+                       f"usually {r.base_pts * r.gp:.1f} · {int(r.sog)} SOG (usually {r.base_sog * r.gp:.0f})", **tile)
+        else:
+            col.metric(title, "—", border=True)
+    car = ms[(ms.scope == "Career") & (ms.stat != "gp") & (ms.target > 1)] if len(ms) else ms
+    if len(car):
+        r = car.sort_values(["needs", "target"], ascending=[True, False]).iloc[0]
+        chance = f" · {r.p_tonight:.0%} tonight" if np.isfinite(r.p_tonight) else ""
+        d.metric(f"Milestone watch · {nm.get(r.player, str(r.player))}", r.milestone.replace(" career", ""),
+                 f"needs {r.needs}{chance}", **tile)
+    else:
+        d.metric("Milestone watch", "—", border=True)
+
+    tabs = st.tabs(["Hot & cold", "Streaks", "Matchups", "Milestones", "Hit rates", "Teams"])
+    with tabs[0]:
+        trends_form(fm, T["goalies"], T["starters"], teams, nm, opp)
+    with tabs[1]:
+        trends_streaks(sk)
+    with tabs[2]:
+        trends_matchups(mu, games, teams, day)
+    with tabs[3]:
+        trends_milestones(ms, nm, opp)
+    with tabs[4]:
+        trends_hits(keep(p), s, day)
+    with tabs[5]:
+        trends_teams(games, teams, opp, day)
+
+
+def trends_form(fm: pd.DataFrame, gf: pd.DataFrame, starters: pd.DataFrame, teams: set, nm: pd.Series, opp: dict):
+    if fm.empty:
+        st.info("Not enough games yet this season.")
+        return
+    depth = st.toggle("Include depth players", value=False, key="tr_depth",
+                      help=f"Off: only skaters who usually score {REGULAR_PTS} points a game or more. A small usual rate "
+                           "makes a short hot run look extreme.")
+    f = fm if depth else fm[fm.base_pts >= REGULAR_PTS]
+
+    def table(x: pd.DataFrame):
+        st.dataframe(pd.DataFrame({
+            "Player": x["name"], "Team": x.team, "Tonight": _tonight(x.opp, x.is_home),
+            "Last 10": [f"{int(g)} G, {int(a)} A, {int(sg)} SOG" for g, a, sg in zip(x.g, x.a, x.sog)],
+            "PTS/gm": x.pts_gm, "Usual PTS": x.base_pts, "SOG/gm": x.sog_gm, "Usual SOG": x.base_sog,
+            "TOI": x.toi, "Usual TOI": x.base_toi, "Heat": x.heat, "Proj PTS": x.pts_hat, "What's behind it": x.driver}),
+            hide_index=True, width="stretch", column_config={
+                "Player": st.column_config.TextColumn(pinned=True), "Team": st.column_config.TextColumn(width="small"),
+                **{c: st.column_config.NumberColumn(format="%.2f", width="small")
+                   for c in ("PTS/gm", "Usual PTS", "SOG/gm", "Usual SOG", "Proj PTS")},
+                **{c: st.column_config.NumberColumn(format="%.1f", width="small") for c in ("TOI", "Usual TOI")},
+                "What's behind it": st.column_config.TextColumn(width="large"),
+                "Heat": st.column_config.NumberColumn(format="%+.1f", width="small",
+                                                      help="Points and shots in the last 10 against his usual rates, in "
+                                                           "standard deviations (0 = as usual)")})
+    st.markdown("#### Running hot")
+    table(f.sort_values("heat", ascending=False).head(15))
+    st.markdown("#### Running cold")
+    table(f.sort_values("heat").head(15))
+    st.caption("Usual = this season and last season's regular season before the last 10 games (at least 20 games). "
+               "What's behind it: ice time, shot volume or shooting % where they differ clearly from usual. A run built "
+               "on shooting % alone tends to fade; one built on more ice time or more shots tends to last.")
+
+    if len(gf):
+        st.markdown("#### Goalies, last 5 starts")
+        g = gf.merge(starters, on="goalie")
+        g = g[g.team.isin(teams)].sort_values("sv_diff", ascending=False)
+        st.dataframe(pd.DataFrame({
+            "Goalie": g.goalie.map(nm), "Team": g.team,
+            "Tonight": [("vs " if opp[t][1] else "@ ") + opp[t][0] for t in g.team],
+            "Record": g.record, "Streak": g.streak, "SV% last 5": g.sv_last, "SV% season": g.sv_season,
+            "SV% last season": g.sv_prev, "vs usual": g.sv_diff * 1000, "GAA last 5": g.gaa_last, "Saves/gm": g.saves_last}),
+            hide_index=True, width="stretch", column_config={
+                **{c: st.column_config.NumberColumn(format="%.3f", width="small")
+                   for c in ("SV% last 5", "SV% season", "SV% last season")},
+                "vs usual": st.column_config.NumberColumn(format="%+.0f", width="small",
+                                                          help="Save % in the last 5 starts minus this season's (last "
+                                                               "season's before 5 starts), in points: .010 = 10"),
+                "GAA last 5": st.column_config.NumberColumn(format="%.2f", width="small"),
+                "Saves/gm": st.column_config.NumberColumn(format="%.1f", width="small")})
+        st.caption("Tonight's expected starters (see Lines & goalies). Record: W-L-OT in those starts.")
+
+
+def trends_streaks(sk: pd.DataFrame):
+    if sk.empty:
+        st.info("No active streaks of note.")
+        return
+
+    def table(x: pd.DataFrame):
+        pcol = [STREAK_P[v.split(" · ")[0].rsplit(" ", 1)[0]] for v in x.streak]
+        pr = [getattr(r, c) for r, c in zip(x.itertuples(), pcol)]
+        st.dataframe(pd.DataFrame({
+            "Player": x["name"], "Team": x.team, "Tonight": _tonight(x.opp, x.is_home), "Streak": x.streak, "Games": x.games,
+            "Since": pd.to_datetime(x.since).dt.strftime("%b %d"), "During it": x.during,
+            "Tonight's bet": [STREAK_BET[c] for c in pcol], "Model %": [round(100 * v) for v in pr],
+            "Fair odds": [american(v) for v in pr]}),
+            hide_index=True, width="stretch", column_config={
+                "Player": st.column_config.TextColumn(pinned=True), "Team": st.column_config.TextColumn(width="small"),
+                "Games": st.column_config.NumberColumn(width="small"), "Model %": st.column_config.ProgressColumn(**PCT),
+                "Fair odds": st.column_config.TextColumn(width="small")})
+    st.markdown("#### Active streaks")
+    table(sk[sk.kind == "Hot"].sort_values(["games", "pts_hat"], ascending=False))
+    st.markdown("#### Slumps")
+    cold = sk[sk.kind == "Cold"]
+    if len(cold):
+        table(cold.sort_values(["games", "pts_hat"], ascending=False))
+    else:
+        st.caption("No slumps of note.")
+    st.caption("Counted in consecutive games played this season. A slump is listed only for a player who usually "
+               "produces (a goal drought from 0.30 goals a game, a point drought from 0.65 points a game, a shot slump "
+               "from 3 shots a game), at least 3 games long and 2 goals or points below his usual pace. Model % is "
+               "the projection's chance of the streak's bet tonight.")
+
+
+def trends_matchups(mu: pd.DataFrame, games: pd.DataFrame, teams: set, day: str):
+    if len(mu):
+        def table(x: pd.DataFrame):
+            st.dataframe(pd.DataFrame({
+                "Player": x["name"], "Team": x.team, "Tonight": _tonight(x.opp, x.is_home), "GP vs": x.gp_vs.astype(int),
+                "PTS vs": x.pts_vs.astype(int), "G vs": x.g_vs.astype(int), "PTS/gm vs": x.pts_gm_vs,
+                "PTS/gm others": x.pts_gm, "SOG/gm vs": x.sog_gm_vs, "SOG/gm others": x.sog_gm,
+                "Last meeting": x["last"], "Proj PTS": x.pts_hat}),
+                hide_index=True, width="stretch", column_config={
+                    "Player": st.column_config.TextColumn(pinned=True), "Team": st.column_config.TextColumn(width="small"),
+                    **{c: st.column_config.NumberColumn(format="%.2f")
+                       for c in ("PTS/gm vs", "PTS/gm others", "SOG/gm vs", "SOG/gm others", "Proj PTS")}})
+        st.markdown("#### Plays well against tonight's opponent")
+        table(mu[mu.score > 0].sort_values("score", ascending=False).head(15))
+        st.markdown("#### Struggles against tonight's opponent")
+        table(mu[mu.score < 0].sort_values("score").head(15))
+        st.caption("Every game since 2018-19 against tonight's opponent (at least 5), next to his rate against everyone "
+                   "else over the same years, ranked by the gap shrunk toward zero for small samples. Matchup history "
+                   "mostly reflects who was on both teams back then, so treat it as colour rather than signal.")
+    tg = team_games()
+    opts = [g for g in games.itertuples() if {g.home, g.away} & teams]
+    if tg.empty or not opts:
+        return
+    st.markdown("#### Head to head")
+    g = st.selectbox("Game", opts, format_func=lambda g: f"{g.away} @ {g.home}", key="tr_h2h")
+    m = trends.head_to_head(tg, g.home, g.away, day, n=10)
+    if m.empty:
+        st.info("No meetings since 2018-19.")
+        return
+    hw = int((m.goals > m.goals_against).sum())
+    tot = m.goals + m.goals_against
+    a, b, c = st.columns(3)
+    a.metric(f"Last {len(m)} meetings", f"{g.home} {hw}–{len(m) - hw} {g.away}", border=True)
+    b.metric("Goals per game", f"{tot.mean():.1f}", f"over 5.5 in {(tot > 5.5).mean():.0%}", delta_color="off", border=True)
+    c.metric("Went to OT / SO", f"{m.last_period_type.isin(['OT', 'SO']).mean():.0%}", border=True)
+    st.dataframe(pd.DataFrame({
+        "Date": m.date.dt.strftime("%Y-%m-%d"), "Venue": np.where(m.is_home, f"at {g.home}", f"at {g.away}"),
+        "Score": [f"{g.home} {x}–{y} {g.away}" for x, y in zip(m.goals, m.goals_against)],
+        "Winner": np.where(m.goals > m.goals_against, g.home, g.away),
+        "Final": m.last_period_type.replace({"REG": ""}), "Total": tot.astype(int),
+        f"{g.home} SOG": m.sog, f"{g.away} SOG": m.sog_against}), hide_index=True, width="stretch")
+
+
+def trends_milestones(ms: pd.DataFrame, nm: pd.Series, opp: dict):
+    if ms.empty:
+        st.info("No milestones within reach tonight.")
+        return
+    scope = st.segmented_control("Show", ["All", "Career", "Season"], default="All", key="tr_ms") or "All"
+    x = ms if scope == "All" else ms[ms.scope == scope]
+    x = x.assign(order=x.stat.eq("gp")).sort_values(["needs", "order", "p_tonight"], ascending=[True, True, False])
+    st.dataframe(pd.DataFrame({
+        "Player": x.player.map(nm), "Team": x.team,
+        "Tonight": [("vs " if opp[t][1] else "@ ") + opp[t][0] for t in x.team],
+        "Milestone": x.milestone, "Now": x.now, "Needs": x.needs, "Model % tonight": (x.p_tonight * 100).round()}),
+        hide_index=True, width="stretch", column_config={
+            "Player": st.column_config.TextColumn(pinned=True), "Team": st.column_config.TextColumn(width="small"),
+            "Now": st.column_config.NumberColumn(format="%d", width="small"),
+            "Needs": st.column_config.NumberColumn(width="small"), "Model % tonight": st.column_config.ProgressColumn(**PCT)})
+    c = careers()
+    asof = (f" Career totals are the NHL's regular-season numbers (refreshed {c.fetched_at.iloc[0][:10]})."
+            if c is not None else " Career totals arrive with the next refresh.")
+    st.caption("Career: every 50 goals; every 100 assists, points and games (games only when tonight is the game); "
+               "goalie wins every 50 and shutouts every 10 (expected starters). Season: 10, 20, 30... goals and 25, "
+               "50... assists and points. First NHL goal or point for anyone without one." + asof +
+               " Model % tonight: the projection's chance of getting there in this game.")
+
+
+HIT_STATS = {"Points": ("points", "pts_hat", "pts", 0.5), "Goals": ("goals", "g_hat", "g", 0.5),
+             "Assists": ("assists", "a_hat", "a", 0.5), "Shots on goal": ("sog", "sog_hat", "sog", 2.5),
+             "PP points": ("ppp", "ppp_hat", "ppp", 0.5)}
+
+
+def trends_hits(p: pd.DataFrame, s: dict, day: str):
+    c1, c2, c3, c4 = st.columns([3.2, 1, 2.4, 1.6])
+    stat = c1.segmented_control("Stat", list(HIT_STATS), default="Points", key="tr_hstat") or "Points"
+    col, hat, a, default = HIT_STATS[stat]
+    line = c2.number_input("Over", value=default, min_value=0.5, step=1.0, format="%.1f", key=f"tr_hline_{col}")
+    win = c3.segmented_control("Games", ["Last 5", "Last 10", "Last 20", "Season"], default="Last 10", key="tr_hwin") or "Last 10"
+    least = c4.slider("Hit at least", 0, 100, 70, 5, format="%d%%", key="tr_hmin")
+    k = int(np.floor(line)) + 1
+    n = None if win == "Season" else int(win.split()[1])
+    hr = trends.hit_rates(hist(), p, day, col, k, n)
+    hr = hr[(hr.gp >= (3 if n is None else min(n, 5))) & (hr.rate * 100 >= least)]
+    if hr.empty:
+        st.info("Nobody has cleared that line that often.")
+        return
+    proj = p.set_index("player")[hat].reindex(hr.index)
+    hr = hr.assign(proj=proj, model=model.prob_at_least(proj.to_numpy(), s["coefs"]["alpha"][a], k))
+    hr = hr.sort_values(["rate", "gp", "model"], ascending=False)
+    st.dataframe(pd.DataFrame({
+        "Player": hr["name"], "Team": hr.team, "Tonight": _tonight(hr.opp, hr.is_home),
+        "Hit": [f"{int(h)}/{int(g)}" for h, g in zip(hr.hits, hr.gp)], "Hit rate": (hr.rate * 100).round(),
+        "This season": (hr.season_rate * 100).round(), "In a row": hr.run.astype(int),
+        "Projection": hr.proj, "Model %": (hr.model * 100).round(), "Fair odds": [american(v) for v in hr.model]}),
+        hide_index=True, width="stretch", column_config={
+            "Player": st.column_config.TextColumn(pinned=True), "Team": st.column_config.TextColumn(width="small"),
+            "Hit": st.column_config.TextColumn(width="small"), "Hit rate": st.column_config.ProgressColumn(**PCT),
+            "This season": st.column_config.ProgressColumn(**PCT), "In a row": st.column_config.NumberColumn(width="small"),
+            "Projection": st.column_config.NumberColumn(format="%.2f", width="small"),
+            "Model %": st.column_config.ProgressColumn(**PCT), "Fair odds": st.column_config.TextColumn(width="small")})
+    st.caption(f"Over {line:g} {stat.lower()} in the games he played (last season's games fill a window early in the "
+               "season). Model % is tonight's projection for the same line; a hit rate far above it is usually a "
+               "small sample or a role he no longer has.")
+
+
+def trends_teams(games: pd.DataFrame, teams: set, opp: dict, day: str):
+    tg = team_games()
+    if tg.empty:
+        st.info("Team results arrive with the next refresh.")
+        return
+    win = st.segmented_control("Games", ["Last 5", "Last 10", "Season"], default="Last 10", key="tr_twin") or "Last 10"
+    n = None if win == "Season" else int(win.split()[1])
+    tf = trends.team_form(tg, sorted(teams), day, n)
+    if tf.empty:
+        st.info("No games yet this season.")
+        return
+    tf = tf.loc[[t for g in games.itertuples() for t in (g.away, g.home) if t in tf.index]]
+    pct = lambda v: (v * 100).round()
+    st.dataframe(pd.DataFrame({
+        "Team": tf.index, "Tonight": [("vs " if opp[t][1] else "@ ") + opp[t][0] for t in tf.index],
+        "Record": tf.record, "Streak": tf.streak, "Last 5": tf.last5, "GF/gm": tf.gf, "GA/gm": tf.ga,
+        "SF/gm": tf.sf, "SA/gm": tf.sa, "PP G/gm": tf.ppg, "Total o5.5": pct(tf.o55), "Total o6.5": pct(tf.o65),
+        "Scored 3+": pct(tf.gf3), "Allowed ≤2": pct(tf.ga2), "Won by 2+": pct(tf.cover), "To OT": pct(tf.ot_rate)}),
+        hide_index=True, width="stretch", column_config={
+            "Team": st.column_config.TextColumn(width="small", pinned=True),
+            "Last 5": st.column_config.TextColumn(width="small", help="Oldest to newest; O = overtime or shootout loss"),
+            **{c: st.column_config.NumberColumn(format="%.2f", width="small") for c in ("GF/gm", "GA/gm", "PP G/gm")},
+            **{c: st.column_config.NumberColumn(format="%.1f", width="small") for c in ("SF/gm", "SA/gm")},
+            **{c: st.column_config.ProgressColumn(**PCT) for c in ("Total o5.5", "Total o6.5", "Scored 3+",
+                                                                   "Allowed ≤2", "Won by 2+", "To OT")}},
+        height=35 * (len(tf) + 1) + 3)
+    st.caption(f"{win + ' games of this season' if n else 'This season'}, in tonight's game order. Record W-L-OT. "
+               "Won by 2+ = covered -1.5 (empty-netters count); a shootout win counts one goal for the winner, as the "
+               "final score does.")
+
+
 _start = os.environ.get("APP_PAGE", "slate")  # headless tests pick the page to open
 PAGES = [("slate", page_slate, "Slate"), ("game", page_game, "Game"), ("lines", page_lines, "Lines & goalies"),
-         ("player", page_player, "Player"), ("edges", page_edges, "Edges"), ("results", page_results, "Results"),
+         ("player", page_player, "Player"), ("trends", page_trends, "Trends"), ("edges", page_edges, "Edges"), ("results", page_results, "Results"),
          ("model", page_model, "How it works")]
 st.navigation([st.Page(f, title=t, url_path=k, default=_start == k) for k, f, t in PAGES]).run()

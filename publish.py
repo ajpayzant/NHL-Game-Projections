@@ -57,6 +57,10 @@ def pack() -> None:
         pd.read_parquet(gg, columns=cols).to_parquet(DIST / "goalie_games.parquet", index=False)
     if (TRACKING / "results_live.parquet").exists():
         shutil.copy(TRACKING / "results_live.parquet", DIST / "results_live.parquet")
+    shutil.copy(C.LAKE / "team_games.parquet", DIST / "team_games.parquet")   # Trends tab: team form
+    careers = C.DATA / "live" / "careers.parquet"
+    if careers.exists():   # Trends tab: career milestones
+        shutil.copy(careers, DIST / "careers.parquet")
     import pickle
     with open(C.DATA / "live" / "state.pkl", "rb") as fh:
         built = pickle.load(fh)["built_at"]

@@ -12,6 +12,8 @@ Release assets read by the app:
     backtest_app.parquet   -> data/backtest/backtest_last.parquet (calibration chart)
     saves.pkl              -> data/saves/models/live.pkl     (the goalie saves slate)
     results_*.parquet      -> data/tracking/                 (Results tab: graded bets, aggregated)
+    team_games.parquet     -> data/lake/team_games.parquet   (Trends tab: team form)
+    careers.parquet        -> data/live/careers.parquet      (Trends tab: NHL career totals)
 """
 from __future__ import annotations
 
@@ -34,8 +36,11 @@ ASSETS = {"state.pkl": C.DATA / "live" / "state.pkl",
           "saves.pkl": C.DATA / "saves" / "models" / "live.pkl",
           "results_live.parquet": C.DATA / "tracking" / "results_live.parquet",
           "results_backtest.parquet": C.DATA / "tracking" / "results_backtest.parquet",
-          "goalie_games.parquet": C.DATA / "saves" / "goalie_games_app.parquet"}
-OPTIONAL = {"saves.pkl", "results_live.parquet", "results_backtest.parquet", "goalie_games.parquet"}  # the goalie page is blank without it; the skater pages must not wait on it
+          "goalie_games.parquet": C.DATA / "saves" / "goalie_games_app.parquet",
+          "team_games.parquet": C.LAKE / "team_games.parquet",
+          "careers.parquet": C.DATA / "live" / "careers.parquet"}
+OPTIONAL = {"saves.pkl", "results_live.parquet", "results_backtest.parquet", "goalie_games.parquet",
+            "team_games.parquet", "careers.parquet"}  # the goalie page is blank without it; the skater pages must not wait on it
 LOCAL_MANIFEST = C.DATA / "live" / "manifest.json"
 
 

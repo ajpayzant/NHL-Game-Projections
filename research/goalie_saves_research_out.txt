@@ -1,0 +1,85 @@
+1. CURRENT MODEL, walk-forward 2023-24..2025-26 regular season (actual starter)
+  2023-24                                      MAE 5.570  RMSE 7.294  corr 0.282  bias +0.06  O/U logloss 0.6103
+  2024-25                                      MAE 5.265  RMSE 6.830  corr 0.246  bias -0.12  O/U logloss 0.5980
+  2025-26                                      MAE 5.290  RMSE 6.755  corr 0.311  bias -0.16  O/U logloss 0.5820
+  pooled                                       MAE 5.375  RMSE 6.964  corr 0.305  bias -0.07  O/U logloss 0.5968
+  constant (pooled mean, hindsight)            MAE 5.702  RMSE 7.311  corr nan  bias -0.00  O/U logloss 0.6344
+  expected MAE if the model's distributions were exactly right: 5.313  (actual 5.375)
+  model sd 6.89 vs actual residual sd 6.96
+
+2. WHERE THE ERROR COMES FROM
+  starts with a pull / exit: 5.8%; MAE there 13.37, finished starts 4.88; share of total abs error from pulls 14.4%
+  team shots faced: model mu corr 0.400, MAE 4.86, bias -0.01; actual sd 6.65, model mu sd 2.80
+  SA noise floor (draws from NB around the model's own mu): MAE 4.80; variance of actual SA explained by mu: 16.0%
+  ceiling: starter's shots known, sv% = model  MAE 1.291  RMSE 1.607  corr 0.978  bias +0.05
+  ceiling: team shots known (pulls unknown)    MAE 2.150  RMSE 3.946  corr 0.844  bias -0.07
+  ceiling: game's sv% known, shots = model     MAE 4.666  RMSE 5.947  corr 0.611  bias -0.35
+  save %: per-shot log loss league-constant 0.32530 vs model 0.32514 (gain 0.05%); corr(pred sv%, game sv%) 0.088
+
+3a. SHOTS FACED FROM THE SKATER MODEL (sum of the opposing skaters' projected SOG)
+  [last lines] n 7,872: team SA corr  saves-model 0.400 | skater-sum 0.396 | blend 0.407 (weights on skater sum {2023: np.float64(0.45), 2024: np.float64(0.45), 2025: np.float64(0.45)}); SA MSE 37.21 / 37.34 / 36.95
+  saves with SA = skater sum (last lines)      MAE 5.390  RMSE 6.990  corr 0.294  bias -0.06  O/U logloss 0.6010
+  saves with SA = blend (last lines)           MAE 5.368  RMSE 6.958  corr 0.307  bias -0.07  O/U logloss 0.5983
+  saves, current (same rows, NB approx)        MAE 5.375  RMSE 6.964  corr 0.305  bias -0.07  O/U logloss 0.5987
+  saves, current (same rows, its own pmf)      MAE 5.375  RMSE 6.964  corr 0.305  bias -0.07  O/U logloss 0.5968
+  [tonight lines] n 7,872: team SA corr  saves-model 0.400 | skater-sum 0.398 | blend 0.408 (weights on skater sum {2023: np.float64(0.5), 2024: np.float64(0.45), 2025: np.float64(0.5)}); SA MSE 37.21 / 37.29 / 36.92
+  saves with SA = skater sum (tonight lines)   MAE 5.385  RMSE 6.981  corr 0.298  bias -0.06  O/U logloss 0.6004
+  saves with SA = blend (tonight lines)        MAE 5.365  RMSE 6.954  corr 0.309  bias -0.07  O/U logloss 0.5980
+  saves, current (same rows, NB approx)        MAE 5.375  RMSE 6.964  corr 0.305  bias -0.07  O/U logloss 0.5987
+  saves, current (same rows, its own pmf)      MAE 5.375  RMSE 6.964  corr 0.305  bias -0.07  O/U logloss 0.5968
+
+3b. LEFTOVER SIGNAL IN SHOTS FACED: residual log(SA/mu) on candidate pregame inputs (fit on 2 seasons, test on the 3rd)
+  proj_gd        out-of-season R2 of the residual: +0.0008 -0.0020 +0.0008  (slope -0.0035)
+  ctx_home       out-of-season R2 of the residual: -0.0006 +0.0000 +0.0001  (slope +0.0034)
+  ctx_own_b2b    out-of-season R2 of the residual: -0.0000 -0.0003 -0.0005  (slope -0.0081)
+  ctx_opp_b2b    out-of-season R2 of the residual: +0.0002 +0.0001 +0.0001  (slope -0.0074)
+  ctx_venue      out-of-season R2 of the residual: -0.0004 +0.0000 -0.0000  (slope -0.0001)
+  log_sk_ratio   out-of-season R2 of the residual: +0.0064 +0.0055 +0.0057  (slope +0.4143)
+  early          out-of-season R2 of the residual: +0.0011 -0.0006 +0.0012  (slope +0.0147)
+  residual by month (actual / model SA): 1:0.979 2:0.989 3:0.967 4:0.974 10:0.991 11:0.968 12:0.981
+
+3c. SAVE %: how much to trust goalie talent (multiplier k on the shrunk talent; 1 = current)
+  k 0.0: per-shot log loss 0.32521
+  k 0.5: per-shot log loss 0.32515
+  k 1.0: per-shot log loss 0.32514   <- current
+  k 1.5: per-shot log loss 0.32518
+  k 2.0: per-shot log loss 0.32527
+  k 3.0: per-shot log loss 0.32562
+  matchup shot quality: corr(predicted xG/shot, game's actual xG/shot) 0.268; sd of game xG/shot 0.0204 vs sd of prediction 0.0057
+  talent spread: sd of talent 4.0 goals per 1000 shots; sd of game sv% 0.0782
+
+3d. DISTRIBUTION: calibration of P(over) at common lines, and the spread
+  o22.5: predicted 0.642  actual 0.647
+  o24.5: predicted 0.525  actual 0.526
+  o26.5: predicted 0.408  actual 0.415
+  o28.5: predicted 0.302  actual 0.311
+  o30.5: predicted 0.213  actual 0.220
+  pooled reliability: 0.07->0.08  0.15->0.16  0.25->0.26  0.35->0.36  0.45->0.46  0.55->0.55  0.65->0.65  0.74->0.74  0.83->0.80  0.91->1.00
+  PIT deciles (flat = calibrated spread; U = too narrow): 0.098 0.099 0.106 0.095 0.100 0.096 0.099 0.099 0.106 0.103
+  NB approx with sd x0.9: O/U logloss 0.5988
+  NB approx with sd x1.0: O/U logloss 0.5987
+  NB approx with sd x1.1: O/U logloss 0.6000
+  NB approx with sd x1.2: O/U logloss 0.6021
+
+3e. MARKET: closing saves lines 2025-26 (The Odds API cache, best of 5 books; p_mkt = consensus no-vig)
+  644 goalie-lines (started goalie only): log loss ours 0.6859 | market 0.6939 | blend 0.25 0.6909 | blend 0.50 0.6885 | blend 0.75 0.6869
+  mean line 23.9; our mean saves on those starts 24.07; actual 23.97; market implied P(over) 0.503, ours 0.513, actual 0.508
+  we are higher than market by 5+ pts: n 148, ours 0.578, market 0.501, actual 0.574
+  we are lower than market by 5+ pts: n 79, ours 0.430, market 0.504, actual 0.430
+  bets with edge >= 3%: n 382, ROI +8.7% (+/- 4.8%)
+  bets with edge >= 5%: n 227, ROI +7.9% (+/- 6.2%)
+  bets with edge >= 8%: n 76, ROI +17.0% (+/- 10.7%)
+
+4. THIS SEASON (2026-27 to date, walk-forward = what live.build_state does)
+  2026-27 n 368                                MAE 5.015  RMSE 6.368  corr 0.341  bias -0.53  O/U logloss 0.5629
+  team SA: model mu 27.01 vs actual 27.20 (bias -0.19); starter shots model 26.12 vs actual 26.70; sv% model 0.8910 vs actual 0.8913
+  online shot_bias at the last day +0.005, goal_ratio 1.030
+  same window 2023-24: n 232, bias -0.11, SA bias -0.12, MAE 5.69, corr 0.298
+  same window 2024-25: n 276, bias -0.19, SA bias -0.35, MAE 5.36, corr 0.208
+  same window 2025-26: n 298, bias -0.89, SA bias -0.71, MAE 5.14, corr 0.338
+  league SA per team-game by season (actual): 2023:30.12 2024:28.08 2025:27.65 2026:27.20published starts matched to the actual starter: 98
+  published mean 23.39  walk-forward 23.41  actual 24.91
+  bias published -1.52  walk-forward -1.49  (sd of a 98-start mean ~0.66)
+  MAE published 5.43  walk-forward 5.43
+  published - walk-forward per start: mean -0.02, sd 0.13
+  team SA on these games: model mu 27.20, actual 28.18

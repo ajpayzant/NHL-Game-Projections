@@ -1,0 +1,25 @@
+ratios are projected / actual (1.00 = unbiased); each cell pools 2023-24, 2024-25, 2025-26
+
+games     n  PP TOI   PPP  <82GP PTS  <82GP TOI bias  stars PTS  stars A  all PTS  all SOG
+ 1-14 24185   0.913 0.929      1.009           0.204      1.002    0.986    0.985    0.987
+15-30 27648   1.030 1.055      1.026           0.061      1.021    0.998    1.031    0.994
+31-50 34558   1.046 1.028      1.037           0.096      0.983    0.968    1.007    0.996
+51-82 55284   1.027 1.022      1.015           0.003      0.999    0.970    0.993    0.993
+
+by season, games 1-14 vs the rest:
+ season games  PP TOI   PPP  <82GP PTS  stars PTS
+   2023   15+   1.040 1.042      1.046      1.005
+   2023  1-14   0.900 0.899      0.989      0.947
+   2024   15+   1.054 1.040      0.997      0.988
+   2024  1-14   0.947 0.967      1.031      1.040
+   2025   15+   1.007 1.013      1.025      1.004
+   2025  1-14   0.894 0.925      1.012      1.030
+
+team shots: spread of each team's projected/actual SOG ratio within a phase, vs pure noise,
+and whether a team's miss in one phase carries into the next (corr):
+  2023: 1-14: sd 0.057 vs noise 0.048 | 15-30: sd 0.058 vs noise 0.045 | 31-50: sd 0.054 vs noise 0.041 | 51-82: sd 0.056 vs noise 0.032
+        carry-over 1-14->15-30 +0.01 15-30->31-50 +0.21 31-50->51-82 +0.42
+  2024: 1-14: sd 0.051 vs noise 0.050 | 15-30: sd 0.073 vs noise 0.047 | 31-50: sd 0.055 vs noise 0.042 | 51-82: sd 0.048 vs noise 0.033
+        carry-over 1-14->15-30 +0.03 15-30->31-50 +0.16 31-50->51-82 +0.08
+  2025: 1-14: sd 0.050 vs noise 0.050 | 15-30: sd 0.055 vs noise 0.047 | 31-50: sd 0.046 vs noise 0.043 | 51-82: sd 0.042 vs noise 0.034
+        carry-over 1-14->15-30 +0.24 15-30->31-50 +0.10 31-50->51-82 +0.04

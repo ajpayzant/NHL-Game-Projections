@@ -1,0 +1,28 @@
+team-games this season: 374; with a pre-start fetch 304, with a puck-drop chart 312
+chart changed after the last pre-start fetch (a late update we only saw later): 50.6%
+puck-drop chart last updated, minutes before start: {'count': 312.0, 'mean': 486.0, 'std': 821.0, 'min': -4.0, '10%': 11.0, '25%': 18.0, '50%': 23.0, '75%': 497.0, 'max': 4372.0}
+puck-drop chart based on: {'a reporter / projected chart': 293, "a 'Last Game' chart": 19}
+
+1. LINEUP ACCURACY vs what actually played (304 team-games with all three)
+                       lineup  team-games  listed_dressed  dressed_listed  line_ok  pp1_ok  perfect_18
+                    last game         304           0.942           0.942    0.361   0.849       0.306
+latest chart before puck drop         304           0.976           0.976    0.471   0.879       0.664
+  chart at puck drop + 10 min         304           0.988           0.988    0.475   0.884       0.842
+  listed_dressed = share of the listed skaters who played; dressed_listed = share of those who played that were listed; line_ok = same F line / D pair; pp1_ok = share of the actual PP1 that was listed on PP1; perfect_18 = exact 18
+
+  latest pre-start chart, by minutes before puck drop it was fetched:
+               n  line_ok  dressed_listed
+bucket                                   
+(0, 30]       40    0.471           0.983
+(30, 60]      52    0.548           0.973
+(60, 120]     94    0.414           0.975
+(120, 240]   114    0.473           0.974
+(240, 2000]    4    0.745           0.986
+
+2. PROJECTION ACCURACY (walk-forward 2026-27, same rows)
+  last game's lines                  n 5,471 | TOI MAE 1.807 | sog 1.2115 | goals 0.5863 | assists 0.7612 | points 0.8954 | ppp 0.3675
+  pre-start chart, w 0.5 (app now)   n 5,471 | TOI MAE 1.790 | sog 1.2102 | goals 0.5863 | assists 0.7598 | points 0.8941 | ppp 0.3650
+  pre-start chart, w 1.0             n 5,471 | TOI MAE 1.897 | sog 1.2132 | goals 0.5867 | assists 0.7598 | points 0.8945 | ppp 0.3672
+  puck-drop chart, w 0.5             n 5,471 | TOI MAE 1.777 | sog 1.2104 | goals 0.5862 | assists 0.7592 | points 0.8934 | ppp 0.3644
+  puck-drop chart, w 1.0             n 5,471 | TOI MAE 1.880 | sog 1.2135 | goals 0.5865 | assists 0.7589 | points 0.8934 | ppp 0.3667
+  actual lines (oracle)              n 5,471 | TOI MAE 1.592 | sog 1.2015 | goals 0.5857 | assists 0.7548 | points 0.8890 | ppp 0.3513

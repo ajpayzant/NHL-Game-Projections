@@ -2,7 +2,7 @@
 
 Nothing here changes a projection: it reads the same projections the other tabs show and
 prices each book's line with the model's own distributions
-    skater props   model.prob_at_least with the fitted overdispersion (any x.5 line)
+    skater props   model.prop_prob: the fitted count distribution + long-odds remap (any x.5 line)
     goalie saves   the saves model's P(over) for that goalie, as if he starts (books void
                    a goalie prop when he doesn't)
     game lines     the full projected final score (markets.final_scores), so any spread or
@@ -51,9 +51,10 @@ def match_games(odds: pd.DataFrame, games: pd.DataFrame) -> pd.DataFrame:
     return odds.assign(game_id=[gid.get(key(h) + "|" + key(a)) for h, a in zip(odds.home, odds.away)])
 
 
-def compare(odds: pd.DataFrame, games: pd.DataFrame, proj: pd.DataFrame, alpha: dict,
+def compare(odds: pd.DataFrame, games: pd.DataFrame, proj: pd.DataFrame, co: dict,
             goalies: pd.DataFrame | None = None, now: pd.Timestamp | None = None) -> tuple[pd.DataFrame, dict]:
-    """One row per (bet, book) with the model's probability. Also returns match counts."""
+    """One row per (bet, book) with the model's probability. Also returns match counts.
+    co: the fitted coefficients (alpha + long-odds tail maps), or just the alpha dict."""
     now = now or pd.Timestamp.now(tz="UTC")
     o = match_games(odds, games)
     o = o[o.game_id.notna() & (pd.to_datetime(o.commence_time, utc=True) > now)].copy()   # pregame only
@@ -120,7 +121,7 @@ def compare(odds: pd.DataFrame, games: pd.DataFrame, proj: pd.DataFrame, alpha: 
         if row is None or r.point is None or not np.isfinite(r.point) or float(r.point).is_integer():
             continue
         _, col, a = PROPS[r.market]
-        p_over = float(model.prob_at_least([getattr(row, col)], alpha[a], int(np.floor(r.point)) + 1)[0])
+        p_over = float(model.prop_prob(a, [getattr(row, col)], int(np.floor(r.point)) + 1, co)[0])
         o.at[i, "p_model"] = p_over if str(r["name"]).lower() == "over" else 1 - p_over
         o.at[i, "proj"] = getattr(row, col)
         o.at[i, "team"] = row.team

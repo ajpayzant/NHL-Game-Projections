@@ -44,7 +44,10 @@ player's production per minute is very different in each.
 
 1. **Team minutes tonight.** How many PP minutes the team should get depends on how often it
    draws penalties and how often tonight's opponent takes them (and vice versa for PK). The
-   rest of the game is EV. Playoff games get extra (20-minute overtimes).
+   rest of the game is EV. Playoff games get extra (20-minute overtimes). Each stage of the
+   regular season (games 1-7, 8-14, 15-25, 26-40, 41-60, 61+) gets its own offset: referees call
+   about 16% more penalties in October, and the running averages lag that, so without it PP time
+   came out ~9% low over a team's first 14 games and ~3-5% high through game 50 (2023-26).
 2. **The player's share** of those minutes. Two things decide it:
    - his own recent share (weighted toward the last ~4 games, with a 16-game version for stability);
    - what **his team usually gives the slot he is in tonight** (first-line forwards typically
@@ -128,11 +131,34 @@ Small multipliers, each fitted from the data (1.00 = no effect):
 The age terms correct a lag: a multi-year history trails a young player who is still improving
 and flatters a veteran who is declining.
 
+Shots get three more terms (added October 2026):
+- **Shot attempts.** His attempts per minute (on goal, missed or blocked, ~40-game memory) times
+  the share of his attempts that reach the net (~320 games) give a second estimate of his shot
+  rate; the model leans about 80% of the way toward it where the two disagree. Attempts settle
+  faster than shots on goal, so this matters most for short histories (call-ups, returns from
+  injury): their shot error fell 1.9% and their bias from −7% to −1%.
+- **His own team's shot volume**, a fast (~5-game) rate of the team's shots per EV / PP minute
+  against the league: systems and coaching change shot volume quickly. It mainly fixes team totals
+  (the spread of team projected/actual shots fell from 0.033 to 0.026, against ~0.021 of pure noise).
+- **Defence**, a small offset so defencemen (whose attempts are blocked more often) stay calibrated.
+
+Together, walk-forward 2023-27: shot deviance −0.19% (better in every season), team shot totals
+miss by 4.84 a game instead of 4.85. Goals, assists and points are unchanged.
+
 ### Step 5: Probabilities
 
 Goals and assists follow a Poisson distribution around their projections; shots are slightly
 more spread out than Poisson (negative binomial, α≈0.05). That gives P(1+ point), P(goal),
 P(3+ SOG) and so on. These probabilities were checked against what actually happened (section 5).
+
+**Long-odds lines.** Through the common lines the distributions are right, but at the long-odds
+ones they drifted: 4+ points was projected 0.38% of the time and happened 0.32%, 3+ goals was 10%
+too often, 4+ / 5+ shots 3-4% too rarely. Each line from 2+ up (2+/3+ goals, 2+/3+/4+ points, 2+
+assists, 2+ PPP, 3+ to 6+ shots) has its log-odds remapped by a small fit made with the model on
+its two most recent training seasons. Walk-forward, those lines come out within about 0-2% of what
+happened and every one prices slightly better. Within each player tier (bottom 40% to top 1%)
+multi-point and multi-assist lines are within a few percent; the thinnest cells (a top-1% player's
+4+ points, 3+ goals for depth players) are too rare to read closely.
 
 **Fair odds.** Any probability converts to a no-vig American price: 60% → −150, 25% → +300,
 50% → EVEN. "SOG o2.5" is the same event as 3+ SOG, "Points o0.5" is 1+ point. A sportsbook's
@@ -260,7 +286,9 @@ weeks of the season.
 ## 7. Goalies
 
 The Slate (switch **Players** to Goalies) and the Game page (under Defence) also show goalie saves, from
-the saves model merged in from the Goalie Saves tool, unchanged. It projects the shots a team faces,
+the saves model merged in from the Goalie Saves tool. It projects the shots a team faces (blended
+half and half with the opposing skaters' projected shots on goal from this tool, which brought the
+saves miss from 5.375 to 5.365 and the over/under log loss from 0.5987 to 0.5978 in 2023-26),
 the goalie's save chance on those shots (matchup shot quality and his talent), and the chance he gets
 pulled, then simulates the game 10,000 times. **SV** is his average saves if he starts, counting the
 chance he's pulled. In a game he finishes he usually beats it by about a save, and a pulled start

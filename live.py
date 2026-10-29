@@ -487,7 +487,7 @@ def build_state(fetch_new: bool = True, verbose: bool = True) -> dict:
     try:  # goalie saves for the same games; the skater slate never waits on it
         if fetch_new:
             saves_live.refresh_lake(verbose)
-        saves_live.build_state(games, verbose)
+        saves_live.build_state(games, verbose, skaters=_skater_shots(state, pg))
     except Exception as e:
         print(f"saves state not rebuilt: {e!r}")
     if fetch_new:
@@ -496,6 +496,21 @@ def build_state(fetch_new: bool = True, verbose: bool = True) -> dict:
         except Exception as e:
             print(f"careers not refreshed: {e!r}")
     return state
+
+
+def _skater_shots(state: dict, pg: pd.DataFrame) -> dict:
+    """Projected skater SOG per upcoming team-game (last game's lines, as in the research) and
+    the actual totals of past games, for the saves model's shots-faced blend."""
+    rows = []
+    for day in sorted(state["games"].date.unique()):
+        p = project(state["slate"][state["slate"].date == pd.Timestamp(day)],
+                    deployments(state, day, use_dfo=False, log=False, overrides=False), state)
+        if len(p):
+            rows.append(p.groupby(["game_id", "team"]).sog_hat.sum().rename("sk").reset_index())
+    hist = pg[pg.season >= C.CURRENT_SEASON - 2].groupby(["game_id", "team"]).sog.sum().rename("sk").reset_index()
+    hist["team"] = hist.team.astype(str)
+    return {"slate": pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=["game_id", "team", "sk"]),
+            "history": hist}
 
 
 def load_state() -> dict | None:

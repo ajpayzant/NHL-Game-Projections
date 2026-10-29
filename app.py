@@ -37,7 +37,8 @@ def _sync() -> str | None:
 
 _sync()
 HIST_COLS = ["game_id", "date", "season", "game_type", "team", "opp", "is_home", "player", "name", "pos",
-             "toi", "toi_pp", "toi_sh", "sog", "goals", "assists", "points", "g_pp", "a_pp", "line", "pp_unit", "pk_unit"]
+             "toi", "toi_pp", "toi_sh", "sog", "goals", "assists", "points", "g_pp", "a_pp", "line", "pp_unit", "pk_unit",
+             "ixg_ev", "ixg_pp", "ixg_sh"]
 
 
 # ---------------------------------------------------------------- data
@@ -66,13 +67,27 @@ def hist() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=900, show_spinner="Reading Daily Faceoff lines and starters...")
-def _dfo_deployments(day: str, built_at: str) -> dict:
+def _dfo_deployments(day: str, built_at: str, slot: int) -> dict:
     return live.deployments(state(), day, use_dfo=True, log=True, overrides=False)
+
+
+DFO_FRESH_NEAR_START = 5 * 60   # seconds between Daily Faceoff reads close to puck drop (else 15 min)
+
+
+def _dfo_slot(day: str) -> int:
+    """Cache slot for the Daily Faceoff read: 5-minute slots from 90 minutes before a game on
+    `day` starts until 15 minutes after (half of the charts change in that last stretch), else 15."""
+    now = pd.Timestamp.now(tz="UTC")
+    g = state()["games"]
+    start = pd.to_datetime(g[g.date == day].start_utc, utc=True)
+    near = ((start - now).dt.total_seconds().between(-15 * 60, 90 * 60)).any()
+    step = DFO_FRESH_NEAR_START if near else 900
+    return int(now.timestamp() // step) * step
 
 
 def deployments(day: str) -> dict:
     s = state()
-    deps = json.loads(json.dumps(_dfo_deployments(day, s["built_at"]), default=str))  # a copy
+    deps = json.loads(json.dumps(_dfo_deployments(day, s["built_at"], _dfo_slot(day)), default=str))  # a copy
     deps = {t: {**d, "skaters": {int(k): v for k, v in d["skaters"].items()}} for t, d in deps.items()}
     for k, v in live.load_overrides().items():  # overrides are read fresh on every run
         d, t = k.split(":")
@@ -1185,7 +1200,7 @@ def _edges(odds_mtime: float, day: str, built_at: str, deps_key: str) -> tuple[p
     """The full comparison, cached until the odds, the projections or a lineup change, so
     filtering and sorting the table is instant."""
     s, deps = state(), deployments(day)
-    return edges.compare(_odds(odds_mtime), s["games"], projections(day), s["coefs"]["alpha"], goalie_lines(day, deps))
+    return edges.compare(_odds(odds_mtime), s["games"], projections(day), s["coefs"], goalie_lines(day, deps))
 
 
 def goalie_lines(day: str, deps: dict) -> pd.DataFrame:
@@ -1275,7 +1290,7 @@ def check_line(day: str, s: dict, expanded: bool = False):
             side = d1.segmented_control("Side", ["Over", "Under"], default="Over", key="chk_p_ou") or "Over"
             default = {"Points": 0.5, "Shots": 2.5, "Goals": 0.5, "Assists": 0.5, "PP points": 0.5}[market]
             line = d2.number_input("Line", value=default, step=0.5, key=f"chk_line_{market}")
-            win_push = linecheck.skater(float(r[col]), s["coefs"]["alpha"][akey], line, side == "Over")
+            win_push = linecheck.skater(float(r[col]), akey, s["coefs"], line, side == "Over")
             proj_text = f"{r[col]:.2f} {market.lower()} projected ({r.toi_hat:.1f} min)"
             bet = f"{r['name']} {side.lower()} {line:g} {market.lower()}"
         with d3:
@@ -1548,7 +1563,7 @@ def _trends(day: str, built_at: str, deps_key: str, hist_mtime: float) -> dict:
                              if g["role"] == "Starter"], columns=["goalie", "team"])
     gg = goalie_games()
     return {"form": trends.form(h, p, day), "streaks": trends.streaks(h, p, day), "matchups": trends.matchups(h, p, day),
-            "milestones": trends.milestones(careers(), h, p, starters, day, s["coefs"]["alpha"]),
+            "milestones": trends.milestones(careers(), h, p, starters, day, s["coefs"]),
             "goalies": trends.goalie_form(gg, starters.goalie, day) if len(gg) and len(starters) else pd.DataFrame(),
             "starters": starters}
 
@@ -1624,18 +1639,22 @@ def page_trends():
     else:
         d.metric("Milestone watch", "—", border=True)
 
-    tabs = st.tabs(["Hot & cold", "Streaks", "Matchups", "Milestones", "Hit rates", "Teams"])
+    tabs = st.tabs(["Role changes", "Hot & cold", "Streaks", "Finishing", "Matchups", "Milestones", "Hit rates", "Teams"])
     with tabs[0]:
-        trends_form(fm, T["goalies"], T["starters"], teams, nm, opp)
+        trends_roles(keep(p), deps, teams, nm, day)
     with tabs[1]:
-        trends_streaks(sk)
+        trends_form(fm, T["goalies"], T["starters"], teams, nm, opp)
     with tabs[2]:
-        trends_matchups(mu, games, teams, day)
+        trends_streaks(sk)
     with tabs[3]:
-        trends_milestones(ms, nm, opp)
+        trends_finishing(keep(p), day)
     with tabs[4]:
-        trends_hits(keep(p), s, day)
+        trends_matchups(mu, games, teams, day)
     with tabs[5]:
+        trends_milestones(ms, nm, opp)
+    with tabs[6]:
+        trends_hits(keep(p), s, day)
+    with tabs[7]:
         trends_teams(games, teams, opp, day)
 
 
@@ -1809,7 +1828,7 @@ def trends_hits(p: pd.DataFrame, s: dict, day: str):
         st.info("Nobody has cleared that line that often.")
         return
     proj = p.set_index("player")[hat].reindex(hr.index)
-    hr = hr.assign(proj=proj, model=model.prob_at_least(proj.to_numpy(), s["coefs"]["alpha"][a], k))
+    hr = hr.assign(proj=proj, model=model.prop_prob(a, proj.to_numpy(), k, s["coefs"]))
     hr = hr.sort_values(["rate", "gp", "model"], ascending=False)
     st.dataframe(pd.DataFrame({
         "Player": hr["name"], "Team": hr.team, "Tonight": _tonight(hr.opp, hr.is_home),
@@ -1827,11 +1846,129 @@ def trends_hits(p: pd.DataFrame, s: dict, day: str):
                "small sample or a role he no longer has.")
 
 
+ROLE_TOI_MOVE = 1.5   # minutes of projected TOI against the last 10 that make a line move worth showing
+
+
+def trends_roles(p: pd.DataFrame, deps: dict, teams: set, nm: pd.Series, day: str):
+    rc = trends.role_changes(hist(), p, day)
+    big = st.toggle("Big moves only", value=True, key="tr_rbig",
+                    help=f"First games for a team, players back after missing 2+ games, moves onto or off PP1, and line moves "
+                         f"the model expects to change his ice time by {ROLE_TOI_MOVE:g}+ minutes against his last 10 games")
+    if len(rc):
+        rc = rc[rc.team.isin(teams)].assign(d_toi=rc.toi_hat - rc.l10_toi)
+        if big:
+            missed = pd.to_numeric(rc.change.str.extract(r"missed (\d+)")[0], errors="coerce").fillna(0)
+            rc = rc[(rc["rank"] <= 1) | (missed >= 2) | rc.change.str.contains("PP1")
+                    | (rc.d_toi.abs() >= ROLE_TOI_MOVE)]
+        rc = rc.assign(first=rc["rank"] > 1, order=rc.d_toi.abs().fillna(0)).sort_values(["first", "order"], ascending=[True, False])
+    st.markdown("#### Moving up, down or back in")
+    if rc.empty:
+        st.caption("No role changes of note.")
+    else:
+        st.dataframe(pd.DataFrame({
+            "Player": rc["name"], "Team": rc.team, "Tonight": _tonight(rc.opp, rc.is_home), "Change": rc.change,
+            "Tonight's role": rc.tonight, "Last game": rc.before, "Proj TOI": rc.toi_hat, "Last-10 TOI": rc.l10_toi,
+            "TOI change": rc.d_toi, "Proj PTS": rc.pts_hat, "Proj SOG": rc.sog_hat}),
+            hide_index=True, width="stretch", column_config={
+                "Player": st.column_config.TextColumn(pinned=True), "Team": st.column_config.TextColumn(width="small"),
+                **{c: st.column_config.NumberColumn(format="%.1f", width="small") for c in ("Proj TOI", "Last-10 TOI")},
+                "TOI change": st.column_config.NumberColumn(format="%+.1f", width="small"),
+                **{c: st.column_config.NumberColumn(format="%.2f", width="small") for c in ("Proj PTS", "Proj SOG")}})
+    out = trends.out_of_lineup(hist(), p, day)
+    out = out[out.team.isin(teams)]
+    st.markdown("#### Played last game, not in tonight's lineup")
+    if out.empty:
+        st.caption("Everyone from last game is dressed.")
+    else:
+        st.dataframe(pd.DataFrame({
+            "Player": out["name"], "Team": out.team,
+            "Last game": [trends._role("D" if p_ == "D" else "F", ln, u) for p_, ln, u in zip(out.pos, out.line, out.pp_unit)],
+            "TOI then": out.toi / 60, "Points then": out.points.astype(int)}),
+            hide_index=True, width="stretch", column_config={
+                "Player": st.column_config.TextColumn(pinned=True), "TOI then": st.column_config.NumberColumn(format="%.1f")})
+    stale = sorted(t for t in teams if str((deps.get(t, {}).get("dfo") or {}).get("source", "")).lower().startswith("last game")
+                   or deps.get(t, {}).get("source", "").startswith("last game"))
+    st.caption("Tonight's lines are Daily Faceoff's (or your overrides on Lines & goalies); last game's role is the line he "
+               "played by ice time, which follows the coach's numbering only about half the time, so a one-line move can be "
+               "noise. The TOI change is the model's own read of what the move means."
+               + (f" No updated chart yet for {', '.join(stale)}: their lines are last game's, so they show no changes."
+                  if stale else ""))
+
+
+def trends_finishing(p: pd.DataFrame, day: str):
+    fz = trends.finishing(hist(), p, day)
+    if fz.empty:
+        st.info("Not enough games yet.")
+        return
+
+    def table(x: pd.DataFrame):
+        st.dataframe(pd.DataFrame({
+            "Player": x["name"], "Team": x.team, "Tonight": _tonight(x.opp, x.is_home), "GP": x.gp.astype(int),
+            "Goals": x.goals.astype(int), "xG": x.ixg, "Goals - xG": x["diff"], "SOG": x.sog.astype(int), "SH%": x.shp * 100,
+            "Career SH%": x.career_shp * 100, "Proj goals": x.g_hat, "P(goal)": (x.p_g_1 * 100).round(),
+            "Fair odds": [american(v) for v in x.p_g_1]}),
+            hide_index=True, width="stretch", column_config={
+                "Player": st.column_config.TextColumn(pinned=True), "Team": st.column_config.TextColumn(width="small"),
+                "xG": st.column_config.NumberColumn(format="%.1f", width="small"),
+                "Goals - xG": st.column_config.NumberColumn(format="%+.1f", width="small"),
+                **{c: st.column_config.NumberColumn(format="%.1f%%", width="small") for c in ("SH%", "Career SH%")},
+                "Proj goals": st.column_config.NumberColumn(format="%.2f", width="small"),
+                "P(goal)": st.column_config.ProgressColumn(**PCT), "Fair odds": st.column_config.TextColumn(width="small")})
+    st.markdown("#### Scoring above expected (likely to cool)")
+    table(fz.sort_values("diff", ascending=False).head(15))
+    st.markdown("#### Scoring below expected (due)")
+    table(fz.sort_values("diff").head(15))
+    st.caption("Last 20 games (last season's fill in early on). xG = the chance each shot attempt becomes a goal from its "
+               "location, type and situation, summed. Finishing well above or below xG rarely lasts, so the model leans on "
+               "shots and chances rather than recent goals: P(goal) is tonight's projection, not the streak.")
+
+
+@st.cache_data
+def _rest_history(mtime: float) -> pd.DataFrame:
+    return trends.rest_history(team_games())
+
+
+def trends_schedule(games: pd.DataFrame, teams: set, day: str):
+    tg = team_games()
+    sp = trends.schedule_spots(tg, games, day)
+    sp = sp[sp.index.isin(teams)]
+    hist_ = _rest_history(TEAM_GAMES.stat().st_mtime)
+
+    def spot(r) -> str:
+        if r.rest == 0 and r.opp_rest > 0:
+            return "back-to-back vs rested"
+        if r.rest > 0 and r.opp_rest == 0:
+            return "rested vs back-to-back"
+        return "both on a back-to-back" if r.rest == 0 else "both rested"
+
+    kinds = [spot(r) for r in sp.itertuples()]
+    won = [hist_.win.get((k, h), np.nan) for k, h in zip(kinds, sp.is_home)]
+    st.dataframe(pd.DataFrame({
+        "Team": sp.index, "Tonight": [("vs " if h else "@ ") + o for o, h in zip(sp.opp, sp.is_home)],
+        "Days off": sp.rest.astype("Int64"), "Opp days off": sp.opp_rest.astype("Int64"),
+        "Spot": [k if k != "both rested" else "" for k in kinds],
+        "Games in 7 nights": sp.games_7, "Trip": [f"{'Home' if h else 'Road'} game {n}" for h, n in zip(sp.is_home, sp.run)],
+        "Teams in this spot won": [round(100 * w) if np.isfinite(w) else None for w in won]}),
+        hide_index=True, width="stretch", column_config={
+            "Team": st.column_config.TextColumn(width="small", pinned=True),
+            "Days off": st.column_config.NumberColumn(width="small"), "Opp days off": st.column_config.NumberColumn(width="small"),
+            "Games in 7 nights": st.column_config.NumberColumn(width="small", help="Tonight included"),
+            "Teams in this spot won": st.column_config.ProgressColumn(**PCT,
+                                                                       help="Regular seasons since 2018-19, same rest matchup and venue")},
+        height=35 * (len(sp) + 1) + 3)
+    st.caption("Days off before tonight (0 = second night of a back-to-back). Trip: tonight's place in the current road "
+               "trip or homestand. The model already prices rest through ice time and opponent strength; this is the "
+               "league's raw record in the same spot, for context.")
+
+
 def trends_teams(games: pd.DataFrame, teams: set, opp: dict, day: str):
     tg = team_games()
     if tg.empty:
         st.info("Team results arrive with the next refresh.")
         return
+    st.markdown("#### Schedule spots")
+    trends_schedule(games, teams, day)
+    st.markdown("#### Form")
     win = st.segmented_control("Games", ["Last 5", "Last 10", "Season"], default="Last 10", key="tr_twin") or "Last 10"
     n = None if win == "Season" else int(win.split()[1])
     tf = trends.team_form(tg, sorted(teams), day, n)

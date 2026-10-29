@@ -24,7 +24,7 @@ print(m[["name", "opp", "gp_vs", "pts_gm_vs", "pts_gm", "score", "last"]].tail(6
 print(m[["name", "opp", "gp_vs", "pts_gm_vs", "pts_gm", "score"]].head(4).round(2).to_string())
 gl = pd.DataFrame([{"goalie": d["goalie"]} for d in deps.values() if d.get("goalie")])
 car = pd.read_parquet(T.CAREERS)
-ms = T.milestones(car, h, p, gl, day, s['coefs']['alpha'])
+ms = T.milestones(car, h, p, gl, day, s['coefs'])
 nm = dict(zip(s["known"].player, s["known"].name))
 print(ms.assign(name=ms.player.map(nm)).sort_values("needs").to_string())
 hr = T.hit_rates(h, p, day, "points", 1, 10)

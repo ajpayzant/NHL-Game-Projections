@@ -1,7 +1,7 @@
 """Price one betting line by hand: the Edges tab's "Check a line".
 
 Each market uses the same distribution the rest of the tool prices with:
-    skater props   negative binomial around the projection (model.prob_at_least)
+    skater props   the count distribution around the projection (model.prop_prob)
     goalie saves   the saves model's simulated distribution, as if he starts
     game lines     the projected final score (markets.final_scores)
 Whole-number lines can push: the push is refunded, so the edge is measured on the
@@ -20,9 +20,9 @@ def to_decimal(american: float) -> float:
     return 1 + a / 100 if a > 0 else 1 + 100 / abs(a)
 
 
-def skater(mean: float, alpha: float, line: float, over: bool) -> tuple[float, float]:
-    """(P(win), P(push)) for an over / under on a skater stat."""
-    at_least = lambda k: float(model.prob_at_least([mean], alpha, int(k))[0]) if k > 0 else 1.0
+def skater(mean: float, kind: str, co: dict, line: float, over: bool) -> tuple[float, float]:
+    """(P(win), P(push)) for an over / under on a skater stat (kind: sog / g / a / pts / ppp)."""
+    at_least = lambda k: float(model.prop_prob(kind, [mean], int(k), co)[0]) if k > 0 else 1.0
     if float(line).is_integer():
         k = int(line)
         push = at_least(k) - at_least(k + 1)

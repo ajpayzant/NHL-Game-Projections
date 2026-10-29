@@ -43,6 +43,9 @@ K_GF = {"ev": 120, "pp": 30}
 K_ASHARE = 20           # on-ice goals
 K_MATE = 60             # minutes, for linemate quality
 K_GOALIE = 600          # shots faced
+HL_ATTEMPTS, K_ATTEMPTS = 40, {"ev": 120, "pp": 40}   # shot attempts per minute (minutes at the league rate)
+HL_ON_TARGET, K_ON_TARGET = 320, 150                  # share of attempts on goal (attempts)
+HL_TEAM_GEN, K_TEAM_GEN = 5, {"ev": 150, "pp": 40}    # own team's shots per minute, fast (minutes)
 
 
 def load_history() -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -232,6 +235,19 @@ def _player_states(pg: pd.DataFrame) -> pd.DataFrame:
     ls["season"] += 1
     m = pg[["player", "season"]].merge(ls, on=["player", "season"], how="left")
     out["ls_pts_pm"] = ((m.p + K_MATE * hist.points.sum() / (hist.toi.sum() / 60)) / (m.t / 60 + K_MATE)).to_numpy()
+    # shot attempts (on goal, missed or blocked) per minute against the league, and the share of
+    # attempts that reach the net: steadier than shots on goal alone for a short history
+    icf_all = pg.icf_ev + pg.icf_pp + pg.icf_sh
+    for s in ("ev", "pp"):
+        env = league_env(pg, f"icf_{s}", f"t_{s}")
+        tmp = pd.DataFrame({"player": pg.player, "season": pg.season, "n": pg[f"icf_{s}"], "x": pg[f"t_{s}"] * env})
+        e = ew.pregame(tmp, "player", ["n", "x"], HL_ATTEMPTS, GAP)
+        out[f"att_rel_{s}"] = (e.n + K_ATTEMPTS[s] * env) / (e.x + K_ATTEMPTS[s] * env)
+        out[f"env_sog_{s}"] = league_env(pg, f"sog_{s}", f"t_{s}")
+    env = league_env(pg.assign(icf_all=icf_all), "sog_all", "icf_all")
+    tmp = pd.DataFrame({"player": pg.player, "season": pg.season, "n": pg.sog_all, "x": icf_all * env})
+    e = ew.pregame(tmp, "player", ["n", "x"], HL_ON_TARGET, GAP)
+    out["ot_rel"] = (e.n + K_ON_TARGET * env) / (e.x + K_ON_TARGET * env)
     return pd.concat([pg, pd.DataFrame(out, index=pg.index)], axis=1)
 
 
@@ -323,12 +339,21 @@ def _team_states(tg: pd.DataFrame, pg: pd.DataFrame, goalies: pd.DataFrame) -> p
         e = ew.pregame(tmp, "team", ["n", "x"], hl, 10)
         return (e.n + k * env) / (e.x + k * env)
 
+    # own team's shots for per EV / PP minute against the league, fast-moving (systems, coaching)
+    for s, secs in (("ev", "ev_secs"), ("pp", "pp_secs")):
+        env = league_env(tg, f"sf_{s}", secs)
+        tmp = pd.DataFrame({"team": tg.team, "season": tg.season, "n": tg[f"sf_{s}"], "x": tg[secs] * env})
+        e = ew.pregame(tmp, "team", ["n", "x"], HL_TEAM_GEN, 10)
+        kk = K_TEAM_GEN[s] * 60 * env   # K minutes of shots at the league rate
+        st[f"gen_{s}"] = (e.n + kk) / (e.x + kk)
     st["supp_ev"] = suppression("sa_ev", "ev_secs", HL_TEAM, 9000)   # EV shots allowed
     st["supp_pk"] = suppression("sa_pp", "sh_secs", HL_TEAM, 2000)   # shots allowed on the PK
     st["supp_g"] = suppression("ga_all", "mins", 40, 180)            # goals allowed
     st["supp_pkg"] = suppression("ga_sh", "sh_secs", 40, 3000)       # PP goals allowed on the PK
     tg = pd.concat([tg, st], axis=1)
     tg["rest"] = tg.groupby("team").date.diff().dt.days.clip(upper=4).fillna(4)
+    # the team's nth game of the season: referees call more penalties early in a season
+    tg["team_gn"] = tg.sort_values("date").groupby(["season", "team"]).cumcount().reindex(tg.index) + 1
     # rink: total shots in a team's home games vs its road games (scorer bias + home effects)
     for side, flag in (("h", True), ("a", False)):
         part = tg[tg.is_home == flag]
@@ -399,7 +424,7 @@ def build(pg: pd.DataFrame, tg: pd.DataFrame, shots: pd.DataFrame,
     pg["mate"] = _mates(pg)
     goalies = goalie_ratings(shots, pending_goalies)
     tg = _team_states(tg, pg, goalies)
-    own = tg[["game_id", "team", "ew_pp", "ew_sh", "ew_pool_F", "ew_pool_D", "rest", "rink"]]
+    own = tg[["game_id", "team", "ew_pp", "ew_sh", "ew_pool_F", "ew_pool_D", "rest", "rink", "team_gn", "gen_ev", "gen_pp"]]
     opp = tg[["game_id", "team", "ew_pp", "ew_sh", "supp_ev", "supp_pk", "supp_g", "supp_pkg", "rest", "gsax", "goalie"]]
     opp = opp.rename(columns={c: f"opp_{c}" for c in opp.columns if c not in ("game_id",)})
     pg = pg.merge(own, on=["game_id", "team"], how="left")

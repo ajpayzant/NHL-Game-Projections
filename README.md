@@ -76,6 +76,7 @@ next click (on Streamlit Cloud, until the container restarts).
 | `backtest.py` | walk-forward evaluation vs baselines |
 | `live.py` | schedule, rosters, Daily Faceoff lines + starters, overrides, projection |
 | `odds.py`, `edges.py` | sportsbook prices from OpticOdds; each price compared with the model's probability (Edges tab) |
+| `capture.py` | Daily Faceoff charts and starters at puck drop (capture workflow, every 15 min in game hours) for backtests on the lineup that actually stood at the start |
 | `trends.py` | streaks, slumps, hot / cold form, matchups, milestones (NHL career totals, fetched by `live.py`), hit rates and team form (Trends tab; context only, never a model input) |
 | `saves/` | the goalie saves model (shots faced, save %, pull risk, starter model), merged from NHL_Goalie_Saves; its own tables in `data/saves`, rebuilt at the end of `live.py` |
 | `app.py` | Slate · Game · Lines & goalies · Player · Trends · Edges · Results · How it works |

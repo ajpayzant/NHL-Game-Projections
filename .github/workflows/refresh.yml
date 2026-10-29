@@ -44,6 +44,9 @@ jobs:
           gh release download data -p bundle.tar -D dist
           python publish.py unpack dist/bundle.tar
           rm dist/bundle.tar
+          # puck-drop line charts (capture workflow), so the bundle and backtests have them
+          gh release download data -p dfo_capture.parquet -O data/dfo/capture_lines.parquet --clobber || true
+          gh release download data -p dfo_capture_starters.parquet -O data/dfo/capture_starters.parquet --clobber || true
 
       - name: Refresh and project
         run: python live.py

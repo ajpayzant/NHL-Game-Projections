@@ -10,7 +10,7 @@ with sync_playwright() as p:
     pg.goto(f"http://localhost:{port}/trends")
     pg.wait_for_selector("h1", timeout=180000)
     pg.wait_for_timeout(15000)
-    for i, tab in enumerate(["Hot & cold", "Streaks", "Matchups", "Milestones", "Hit rates", "Teams"]):
+    for i, tab in enumerate(["Role changes", "Hot & cold", "Streaks", "Finishing", "Matchups", "Milestones", "Hit rates", "Teams"]):
         pg.get_by_role("tab", name=tab).click()
         pg.wait_for_timeout(4000)
         pg.screenshot(path=str(OUT / f"trends_{i}.png"), full_page=True)

@@ -119,7 +119,8 @@ def snapshot(state: dict | None = None, day: str | None = None, verbose: bool = 
             old = pd.read_parquet(f[k])
             new = pd.concat([old[old.game_id.isin(started)], new[~new.game_id.isin(started)]], ignore_index=True)
         new.to_parquet(f[k], index=False)
-    f["meta"].write_text(json.dumps({"alpha": state["coefs"]["alpha"], "built_at": state["built_at"],
+    f["meta"].write_text(json.dumps({"alpha": state["coefs"]["alpha"], "tail": state["coefs"].get("tail"),
+                                     "built_at": state["built_at"],
                                      "snapshot_at": now.isoformat(timespec="minutes")}))
     if verbose:
         print(f"tracking: snapshot {day}: {len(games)} games, {len(sk)} skaters, {len(gl)} goalies "
@@ -248,7 +249,8 @@ def grade(day: str | None = None, verbose: bool = True) -> None:
         gl = pd.read_parquet(f["goalies"]) if f["goalies"].exists() else pd.DataFrame()
         if len(gl):
             gl["p_over"] = gl.p_over.map(lambda s: {float(k): v for k, v in json.loads(s).items()})
-        alpha = json.loads(f["meta"].read_text())["alpha"]
+        meta = json.loads(f["meta"].read_text())
+        alpha = {"alpha": meta["alpha"], "tail": meta.get("tail")}   # older snapshots: no tail maps
         o = _odds_for(d, games, key)
         parts = []
         for snap, rows in o.items():

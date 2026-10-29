@@ -34,6 +34,10 @@ STATE = C.MODELS / "live.pkl"
 DFO_LR = {"Confirmed": 200.0, "Likely": 8.0, "Expected": 8.0, "Unconfirmed": 2.0}
 LINE_CHART_LR = 2.0     # the goalie listed first on a Daily Faceoff line chart, with no report
 MIN_SHOWN_P = 0.03
+# Shots faced blended (in logs) with the opposing skaters' projected shots on goal from the
+# skater model: saves MAE 5.375 -> 5.365, over/under log loss 0.5987 -> 0.5978 (2023-26,
+# research/shots_improve_saves.py; the weight was chosen on other seasons each time).
+SKATER_BLEND = 0.5
 
 
 # ---------------------------------------------------------------- build
@@ -70,7 +74,24 @@ def _future_rows(games: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def build_state(games: pd.DataFrame, verbose: bool = True) -> dict:
+def _blend_skaters(slate: pd.DataFrame, M_done: pd.DataFrame, skaters: dict) -> pd.DataFrame:
+    """slate.mu blended with the opposing skaters' projected SOG total, scaled by the shots
+    faced per skater shot on goal over the last two seasons. skaters: {"slate": game_id, team
+    (the shooting team), sk; "history": the same with actual skater SOG}."""
+    hist = skaters["history"].rename(columns={"team": "opp"})
+    h = M_done[M_done.season >= M_done.season.max() - 1].merge(hist, on=["game_id", "opp"])
+    if h.empty or "opp" not in slate:
+        return slate
+    ratio = h.sa_faced.sum() / h.sk.sum()
+    sk = slate[["game_id", "opp"]].merge(skaters["slate"].rename(columns={"team": "opp"}), on=["game_id", "opp"], how="left").sk
+    sk = sk.to_numpy(float)
+    mu = slate.mu.to_numpy(float)
+    ok = np.isfinite(sk) & (sk > 0)
+    blended = np.exp(SKATER_BLEND * np.log(np.where(ok, sk * ratio, 1.0)) + (1 - SKATER_BLEND) * np.log(mu))
+    return slate.assign(mu_saves_model=mu, mu_skaters=np.where(ok, sk * ratio, np.nan), mu=np.where(ok, blended, mu))
+
+
+def build_state(games: pd.DataFrame, verbose: bool = True, skaters: dict | None = None) -> dict:
     d = pipeline.load()
     tg = F._plain(d["team_games_xg"])
     fut = _future_rows(games) if len(games) else pd.DataFrame(columns=["game_id"])
@@ -96,6 +117,8 @@ def build_state(games: pd.DataFrame, verbose: bool = True) -> dict:
     if len(slate):
         slate = pd.concat([slate, model.team_rows(slate)], axis=1)
         slate["mu"] = slate.mu_raw * (1 + model.online.shot_bias)
+        if skaters is not None:
+            slate = _blend_skaters(slate, M_all[done], skaters)
 
     # starter model: fitted on every completed team-game; upcoming games use today's rosters
     rosters = {t: roster_goalies(t) for t in sorted(set(fut.team))} if len(fut) else {}

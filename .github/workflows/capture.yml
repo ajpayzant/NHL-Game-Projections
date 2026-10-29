@@ -1,0 +1,59 @@
+name: Capture lines at puck drop
+
+# Daily Faceoff's charts often change in the last half hour before a game, after the day's last
+# refresh. Every 15 minutes in game hours this reads the charts of teams whose games are about to
+# start or just started (capture.py) and appends them to dfo_capture*.parquet in the data release,
+# so backtests can use the lineup that stood at puck drop. Nothing else reads it live.
+# GitHub delays or skips busy schedules; an external trigger (workflow_dispatch) can run it too.
+on:
+  schedule:
+    - cron: "5,20,35,50 16-23 * * *"   # 12:05-19:50 ET
+    - cron: "5,20,35,50 0-4 * * *"     # 20:05-00:50 ET
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: capture
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONUTF8: "1"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Restore earlier captures
+        run: |
+          mkdir -p data/dfo
+          gh release download data -p dfo_capture.parquet -O data/dfo/capture_lines.parquet || true
+          gh release download data -p dfo_capture_starters.parquet -O data/dfo/capture_starters.parquet || true
+
+      - name: Capture
+        id: cap
+        run: |
+          python capture.py
+          [ -f data/dfo/capture_lines.parquet ] && echo "have=1" >> "$GITHUB_OUTPUT" || true
+
+      - name: Publish
+        if: steps.cap.outputs.have == '1'
+        run: |
+          cp data/dfo/capture_lines.parquet dfo_capture.parquet
+          gh release upload data dfo_capture.parquet --clobber
+          if [ -f data/dfo/capture_starters.parquet ]; then
+            cp data/dfo/capture_starters.parquet dfo_capture_starters.parquet
+            gh release upload data dfo_capture_starters.parquet --clobber
+          fi

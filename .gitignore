@@ -7,3 +7,5 @@ data/
 dist/
 research/shots/
 research/edgeprof/
+research/_cache/
+research/*.log

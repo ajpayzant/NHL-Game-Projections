@@ -236,7 +236,7 @@ WORD = {"goals": "goals", "assists": "assists", "points": "points", "gp": "games
 
 
 def milestones(careers: pd.DataFrame | None, h: pd.DataFrame, proj: pd.DataFrame, goalies: pd.DataFrame,
-               day: str, alpha: dict) -> pd.DataFrame:
+               day: str, co: dict) -> pd.DataFrame:
     """Round numbers within reach tonight: career (NHL regular-season totals from the refresh, plus
     any regular-season games after the last one they include) and this season, and first NHL
     goals / points. Each row has the model's chance of getting there tonight where it has one."""
@@ -276,7 +276,7 @@ def milestones(careers: pd.DataFrame | None, h: pd.DataFrame, proj: pd.DataFrame
     if out.empty:
         return out
     hat = {"goals": ("g_hat", "g"), "points": ("pts_hat", "pts"), "assists": ("a_hat", "a")}
-    out["p_tonight"] = [float(model.prob_at_least([meta.at[pid, hat[st][0]]], alpha[hat[st][1]], k)[0])
+    out["p_tonight"] = [float(model.prop_prob(hat[st][1], [meta.at[pid, hat[st][0]]], k, co)[0])
                         if st in hat and pid in meta.index else np.nan
                         for pid, st, k in zip(out.player, out.stat, out.needs)]
     return out
@@ -290,6 +290,123 @@ def _near(pid: int, scope: str, stat: str, v: int, every: int, reach: int) -> li
         return []
     return [{"player": pid, "scope": scope, "stat": stat, "now": v, "target": target, "needs": target - v,
              "milestone": f"{target:,} career {WORD[stat]}" if stat != "gp" else f"{target:,}th NHL game"}]
+
+
+# ---------------------------------------------------------------- role changes and finishing
+
+def _role(grp, line, pp) -> str:
+    """'F2 · PP1', 'D3'."""
+    if line is None or not np.isfinite(line):
+        return "—"
+    return f"{grp}{int(line)}" + (f" · PP{int(pp)}" if pp and np.isfinite(pp) and pp > 0 else "")
+
+
+def role_changes(h: pd.DataFrame, proj: pd.DataFrame, day: str) -> pd.DataFrame:
+    """Tonight's line / PP unit against each player's last game, plus who is back in the lineup
+    and who from the team's last game is not dressed. Ice time follows role more than anything
+    else, so these are the changes worth knowing about."""
+    past = h[h.player.isin(proj.player) & (h.date < pd.Timestamp(day))].sort_values("date")
+    last = past.groupby("player").tail(1).set_index("player")
+    rows = []
+    for r in proj.itertuples():
+        grp = "D" if r.grp == "D" else "F"
+        now = _role(grp, r.given_line, r.given_pp)
+        if r.player not in last.index:
+            rows.append({"player": r.player, "change": "First game", "tonight": now, "before": "—", "rank": 1})
+            continue
+        lg = last.loc[r.player]
+        team_last = past[past.team == r.team].date.max()
+        if lg.team != r.team:
+            rows.append({"player": r.player, "change": f"First game for {r.team}", "tonight": now,
+                         "before": f"{_role(grp, lg.line, lg.pp_unit)} ({lg.team})", "rank": 1})
+            continue
+        before = _role(grp, lg.line, lg.pp_unit)
+        if lg.date < team_last:
+            missed = past[(past.team == r.team) & (past.date > lg.date)].game_id.nunique()
+            rows.append({"player": r.player, "change": f"Back in the lineup (missed {missed})", "tonight": now,
+                         "before": before, "rank": 2})
+            continue
+        bits, rank = [], 9
+        if np.isfinite(lg.line) and int(r.given_line) != int(lg.line):
+            up = int(r.given_line) < int(lg.line)
+            bits.append(f"{'Up' if up else 'Down'} to {grp}{int(r.given_line)}")
+            rank = 3 if up else 4
+        pp_now, pp_then = int(r.given_pp or 0), int(lg.pp_unit or 0)
+        if pp_now != pp_then:
+            bits.append("Off the PP" if pp_now == 0 else (f"Onto PP{pp_now}" if pp_then == 0 else f"PP{pp_then} to PP{pp_now}"))
+            rank = min(rank, 3 if (pp_now and (pp_then == 0 or pp_now < pp_then)) else 4)
+        if bits:
+            rows.append({"player": r.player, "change": " · ".join(bits), "tonight": now, "before": before, "rank": rank})
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    out = out.join(proj.set_index("player")[["name", "team", "opp", "is_home", "toi_hat", "l10_toi", "pts_hat", "sog_hat"]],
+                   on="player")
+    return out
+
+
+def out_of_lineup(h: pd.DataFrame, proj: pd.DataFrame, day: str) -> pd.DataFrame:
+    """Skaters who played in their team's last game but are not dressed tonight."""
+    past = h[(h.date < pd.Timestamp(day)) & h.team.isin(proj.team.unique())]
+    last_gid = past.sort_values("date").groupby("team").game_id.last()
+    lg = past[past.game_id.isin(last_gid) & (past.team.map(last_gid) == past.game_id)]
+    gone = lg[~lg.player.isin(proj.player)]
+    return gone[["player", "name", "team", "pos", "line", "pp_unit", "toi", "points"]]
+
+
+def finishing(h: pd.DataFrame, proj: pd.DataFrame, day: str, n: int = 20) -> pd.DataFrame:
+    """Goals against expected goals (shot quality) over the last n games. A big gap in either
+    direction usually closes; shots and chances are what carry forward."""
+    g = h[h.player.isin(proj.player) & (h.date < pd.Timestamp(day)) & (h.season >= C.CURRENT_SEASON - 1)]
+    g = g.sort_values("date").groupby("player").tail(n).assign(ixg=lambda x: x.ixg_ev + x.ixg_pp + x.ixg_sh)
+    a = g.groupby("player")
+    out = pd.DataFrame({"gp": a.size(), "goals": a.goals.sum(), "ixg": a.ixg.sum(), "sog": a.sog.sum()})
+    car = h[h.player.isin(out.index) & (h.date < pd.Timestamp(day)) & (h.game_type == 2)].groupby("player")
+    out["career_shp"] = car.goals.sum() / car.sog.sum().replace(0, np.nan)
+    out["shp"] = out.goals / out.sog.replace(0, np.nan)
+    out["diff"] = out.goals - out.ixg
+    out = out[out.gp >= min(n, 8)]
+    return out.join(proj.set_index("player")[["name", "team", "opp", "is_home", "g_hat", "p_g_1"]])
+
+
+# ---------------------------------------------------------------- schedule
+
+def schedule_spots(tg: pd.DataFrame, games: pd.DataFrame, day: str) -> pd.DataFrame:
+    """Tonight's rest, back-to-backs, recent load and road trip / homestand for each team."""
+    past = tg[tg.date < pd.Timestamp(day)].sort_values("date")
+    rows = []
+    for g in games.itertuples():
+        for team, opp, home in ((g.away, g.home, False), (g.home, g.away, True)):
+            t = past[past.team == team]
+            last = t.date.max() if len(t) else pd.NaT
+            rest = (pd.Timestamp(day) - last).days - 1 if pd.notna(last) else np.nan
+            recent = t[t.date >= pd.Timestamp(day) - pd.Timedelta(days=6)]
+            # consecutive road (or home) games, tonight included
+            run = 1
+            for h_ in t.is_home.to_numpy()[::-1]:
+                if bool(h_) != home:
+                    break
+                run += 1
+            rows.append({"team": team, "opp": opp, "is_home": home, "rest": rest, "b2b": rest == 0,
+                         "last_home": bool(t.is_home.iloc[-1]) if len(t) else None,
+                         "games_7": len(recent) + 1, "run": run})
+    out = pd.DataFrame(rows).set_index("team")
+    out["opp_rest"] = out.opp.map(out.rest)
+    return out
+
+
+def rest_history(tg: pd.DataFrame) -> pd.DataFrame:
+    """Win % and goals by rest matchup, regular seasons since 2018-19 (the baseline for the spots)."""
+    t = tg[tg.game_type == 2].sort_values("date").copy()
+    t["rest"] = (t.groupby(["team", "season"]).date.diff().dt.days - 1).clip(upper=3)
+    o = t[["game_id", "team", "rest"]].rename(columns={"team": "opp", "rest": "opp_rest"})
+    t = t.merge(o, on=["game_id", "opp"])
+    t = t.dropna(subset=["rest", "opp_rest"])
+    t["spot"] = np.select([(t.rest == 0) & (t.opp_rest > 0), (t.rest > 0) & (t.opp_rest == 0), (t.rest == 0) & (t.opp_rest == 0)],
+                          ["back-to-back vs rested", "rested vs back-to-back", "both on a back-to-back"], "both rested")
+    t["win"] = t.goals > t.goals_against
+    g = t.groupby(["spot", "is_home"])
+    return pd.DataFrame({"games": g.size(), "win": g.win.mean(), "gf": g.goals.mean(), "ga": g.goals_against.mean()})
 
 
 # ---------------------------------------------------------------- hit rates

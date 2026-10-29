@@ -43,11 +43,25 @@ def _apply(X: pd.DataFrame, b: dict[str, float]) -> pd.Series:
 
 # ---------------------------------------------------------------- team minutes and ice time
 
+# Stage of the regular season, by the team's game number. Referees call more penalties in
+# October, and the running PP / PK averages lag that: low early, then high once October's games
+# are in them. Each stage gets its own offset (games 61+ are the baseline).
+PHASES = ((1, 7), (8, 14), (15, 25), (26, 40), (41, 60))
+USE_PHASES = True
+
+
+def _phases(d: pd.DataFrame) -> pd.DataFrame:
+    gn = d["team_gn"] if "team_gn" in d else pd.Series(np.nan, index=d.index)
+    reg = d.game_type == 2
+    return pd.DataFrame({f"ph_{a}": (reg & gn.between(a, b)).astype(float) for a, b in PHASES}, index=d.index)
+
+
 def _team_X(d: pd.DataFrame) -> dict[str, pd.DataFrame]:
     one = pd.Series(1.0, index=d.index)
     po = (d.game_type == 3).astype(float)  # playoff games run longer (20-minute overtimes)
-    return {"pp": pd.DataFrame({"const": one, "ew_pp": d.ew_pp, "opp_ew_sh": d.opp_ew_sh, "playoffs": po}),
-            "sh": pd.DataFrame({"const": one, "ew_sh": d.ew_sh, "opp_ew_pp": d.opp_ew_pp, "playoffs": po})}
+    ph = _phases(d) if USE_PHASES else pd.DataFrame(index=d.index)
+    return {"pp": pd.concat([pd.DataFrame({"const": one, "ew_pp": d.ew_pp, "opp_ew_sh": d.opp_ew_sh, "playoffs": po}), ph], axis=1),
+            "sh": pd.concat([pd.DataFrame({"const": one, "ew_sh": d.ew_sh, "opp_ew_pp": d.opp_ew_pp, "playoffs": po}), ph], axis=1)}
 
 
 def _share_X(d: pd.DataFrame, st: str, slot_col: str) -> pd.DataFrame:
@@ -165,11 +179,25 @@ def _bases(d: pd.DataFrame, t: pd.DataFrame) -> pd.DataFrame:
     return b
 
 
+def _rel(d: pd.DataFrame, col: str) -> pd.Series:
+    return d[col].fillna(1.0) if col in d else pd.Series(1.0, index=d.index)
+
+
 def _ctx(d: pd.DataFrame, t: pd.DataFrame) -> pd.DataFrame:
     tot = t.toi_hat.where(t.toi_hat > 0, 1.0)
     w_ev, w_pp = t.toi_ev_hat / tot, t.toi_pp_hat / tot
     supp = w_ev * d.opp_supp_ev + w_pp * d.opp_supp_pk + (1 - w_ev - w_pp)
+    # shots implied by his shot attempts x his on-target share, against the shots-on-goal base
+    base_sog = sum(t[f"toi_{s}_hat"] * d[f"sog_pm_{s}"] for s in ST)
+    ot = _rel(d, "ot_rel")
+    att_base = (t.toi_ev_hat * _rel(d, "env_sog_ev") * _rel(d, "att_rel_ev") * ot
+                + t.toi_pp_hat * _rel(d, "env_sog_pp") * _rel(d, "att_rel_pp") * ot + t.toi_sh_hat * d.sog_pm_sh)
+    att = np.log((att_base / base_sog.clip(1e-4)).clip(0.33, 3)) if "att_rel_ev" in d else 0.0
+    gen = w_ev * _rel(d, "gen_ev") + w_pp * _rel(d, "gen_pp") + (1 - w_ev - w_pp)
     return pd.DataFrame({
+        "defence": (d.grp == "D").astype(float),
+        "attempts": att,
+        "own_team": np.log(gen.clip(0.5, 2)),
         "const": 1.0,
         "opp_shots": np.log(supp.clip(0.5, 2)),
         "rink": np.log(d.rink.clip(0.8, 1.25)),
@@ -188,6 +216,10 @@ def _ctx(d: pd.DataFrame, t: pd.DataFrame) -> pd.DataFrame:
     }, index=d.index)
 
 
+# Shot attempts and the own team's shot generation (research/shots_improve_*): SOG deviance
+# -0.19% pooled 2023-27, every season, -1.9% for short histories; team-total spread 0.033 -> 0.026.
+USE_SHOT_TERMS = True
+SHOT_TERMS = ["attempts", "own_team", "defence"]   # defence: the attempts term alone left D ~3-5% low
 TERMS = {"sog": ["const", "spread", "younger", "older", "opp_shots", "rink", "home", "b2b", "opp_b2b", "playoffs"],
          "g": ["const", "spread", "younger", "older", "opp_goalie", "home", "playoffs"],
          "a": ["const", "spread", "younger", "older", "opp_goals", "opp_goalie", "home", "linemates", "playoffs"],
@@ -198,7 +230,8 @@ TYPICAL = {"sog": 1.5, "g": 0.15, "a": 0.25, "ppp": 0.12}
 
 
 def _X(X: pd.DataFrame, base: pd.Series, kind: str) -> pd.DataFrame:
-    return X.assign(spread=np.log(base.clip(1e-4) / TYPICAL[kind]))[TERMS[kind]]
+    terms = TERMS[kind] + (SHOT_TERMS if kind == "sog" and USE_SHOT_TERMS else [])
+    return X.assign(spread=np.log(base.clip(1e-4) / TYPICAL[kind]))[terms]
 
 
 def _glm(y, X, offset) -> dict[str, float]:
@@ -233,7 +266,62 @@ def fit(d: pd.DataFrame) -> dict:
                    "ppp": _nb_alpha(d.ppp, mu_ppp)}
     resid = d.toi / 60 - t.toi_hat
     co["toi_sd"] = {grp: float(resid[d.grp == grp].std()) for grp in ("F", "D")}
+    recent = (d.season >= d.season.max() - 1).to_numpy()
+    co["tail"] = _fit_tails({"sog": (d.sog, mu_sog), "g": (d.goals, mu_g), "a": (d.assists, mu_a),
+                             "pts": (d.points, mu_g + mu_a), "ppp": (d.ppp, mu_ppp)}, co["alpha"], recent)
     return co
+
+
+# ---------------------------------------------------------------- long-odds calibration
+# The count distributions are right through the common lines, but at the long-odds ones the
+# Poisson / NB tail was off by up to 15% (4+ points 0.38% projected vs 0.32% actual; 3+ goals
+# 10% high; 4+/5+ SOG 3-4% low; research/full_model_check.py). For each line in TAIL_LINES the
+# log-odds are remapped (a + b * logit p), fitted with the model on its last two training
+# seasons; higher lines use the highest fitted line's map. Walk-forward 2023-27 the ratios
+# come to 1.00-1.02 and every line's log loss improves slightly (research/tail_fix.py).
+TAIL_LINES = {"sog": (2, 3, 4, 5, 6), "g": (2, 3), "a": (2,), "pts": (2, 3, 4), "ppp": (2,)}
+USE_TAIL_FIX = True
+
+
+def _logit(p):
+    p = np.clip(np.asarray(p, float), 1e-6, 1 - 1e-6)
+    return np.log(p / (1 - p))
+
+
+def _fit_tails(series: dict, alpha: dict, rows: np.ndarray) -> dict:
+    out = {}
+    for kind, ks in TAIL_LINES.items():
+        y, mu = series[kind]
+        y, mu = np.asarray(y, float)[rows], np.asarray(mu, float)[rows]
+        out[kind] = {}
+        for k in ks:
+            X = sm.add_constant(_logit(prob_at_least(mu, alpha[kind], k)))
+            hit = (y >= k).astype(float)
+            if hit.sum() < 30:
+                continue
+            a, b = sm.GLM(hit, X, family=sm.families.Binomial()).fit().params
+            out[kind][str(k)] = [float(a), float(b)]
+    return out
+
+
+def prop_prob(kind: str, mu, k: int, co: dict) -> np.ndarray:
+    """P(stat >= k) for kind in sog / g / a / pts / ppp: the fitted count distribution with the
+    long-odds remap. `co` is the fitted coefficients (or just their "alpha" dict: no remap)."""
+    alpha = co["alpha"] if "alpha" in co else co
+    tail = (co.get("tail") or {}).get(kind) if "alpha" in co and USE_TAIL_FIX else None
+    mu = np.atleast_1d(np.asarray(mu, float))
+    if k <= 1 or not tail:
+        return prob_at_least(mu, alpha[kind], k)
+    top = max(int(x) for x in tail)
+    cols = []
+    for j in range(1, k + 1):
+        p = prob_at_least(mu, alpha[kind], j)
+        ab = tail.get(str(min(j, top)))
+        if j >= 2 and ab:
+            p = 1 / (1 + np.exp(-(ab[0] + ab[1] * _logit(p))))
+        cols.append(p)
+    # P(X >= k) can never exceed P(X >= k - 1)
+    return np.minimum.accumulate(np.column_stack(cols), axis=1)[:, -1]
 
 
 def _mu(X: pd.DataFrame, base: pd.Series, b: dict[str, float]) -> pd.Series:
@@ -257,7 +345,8 @@ def predict(d: pd.DataFrame, co: dict) -> pd.DataFrame:
 LABELS = {"const": "calibration", "spread": "spread (stars vs depth)", "opp_shots": "opponent shot suppression",
           "rink": "rink scorer", "home": "home ice", "b2b": "own back-to-back", "opp_b2b": "opponent back-to-back",
           "playoffs": "playoffs", "opp_goalie": "opposing goalie", "opp_goals": "opponent goal suppression",
-          "linemates": "linemates", "opp_pk": "opponent penalty kill", "younger": "age (under 28)", "older": "age (over 28)"}
+          "linemates": "linemates", "opp_pk": "opponent penalty kill", "younger": "age (under 28)", "older": "age (over 28)",
+          "attempts": "shot attempts", "own_team": "own team's shot volume", "defence": "defence"}
 
 
 def multipliers(d: pd.DataFrame, pred: pd.DataFrame, co: dict) -> dict[str, pd.DataFrame]:
@@ -282,18 +371,17 @@ def prob_at_least(mu, alpha: float, k: int) -> np.ndarray:
 
 
 def probabilities(pred: pd.DataFrame, co: dict) -> pd.DataFrame:
-    a = co["alpha"]
     out = pd.DataFrame(index=pred.index)
     for k in SOG_LINES:
-        out[f"p_sog_{k}"] = prob_at_least(pred.sog_hat, a["sog"], k)
+        out[f"p_sog_{k}"] = prop_prob("sog", pred.sog_hat, k, co)
     for k in (1, 2):
-        out[f"p_g_{k}"] = prob_at_least(pred.g_hat, a["g"], k)
-        out[f"p_a_{k}"] = prob_at_least(pred.a_hat, a["a"], k)
+        out[f"p_g_{k}"] = prop_prob("g", pred.g_hat, k, co)
+        out[f"p_a_{k}"] = prop_prob("a", pred.a_hat, k, co)
     for k in (1, 2, 3):
-        out[f"p_pts_{k}"] = prob_at_least(pred.pts_hat, a["pts"], k)
-    if "ppp" in a:
+        out[f"p_pts_{k}"] = prop_prob("pts", pred.pts_hat, k, co)
+    if "ppp" in co["alpha"]:
         for k in (1, 2):
-            out[f"p_ppp_{k}"] = prob_at_least(pred.ppp_hat, a["ppp"], k)
+            out[f"p_ppp_{k}"] = prop_prob("ppp", pred.ppp_hat, k, co)
     return out
 
 
